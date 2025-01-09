@@ -48,8 +48,8 @@ impl StateMachine {
                     self.state = State::Name;
                     self.name_length = 0;
                     self.value = 0;
+                    self.sign = 1;
                 } else if ch == b'.' {
-
                 } else if ch == b'-' {
                     self.sign = -1;
                 } else {

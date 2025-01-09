@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::hash::Hash;
 use memchr::memchr;
 use memmap2::Mmap;
 use crate::MEASUREMENT_FILE;
