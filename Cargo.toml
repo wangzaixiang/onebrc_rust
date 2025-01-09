@@ -1,0 +1,16 @@
+[package]
+name = "onebrc_rust"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+memmap2 = "0.9.5"
+memchr = "2.7.4"
+rustc-hash = "2.1.0"
+clap = { version = "4.5.11", features = ["derive"] }
+
+[profile.release]
+#debug = "full"
+#lto = true
+#overflow-checks = false
+#opt-level = 3
