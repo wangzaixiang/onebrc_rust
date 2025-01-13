@@ -5,30 +5,35 @@ use memmap2::Mmap;
 use rustc_hash::FxHashMap;
 use crate::MEASUREMENT_FILE;
 
-use std::simd::{u8x64};
+use std::simd::{u16x4, u8x64};
 use std::simd::cmp::SimdPartialEq;
+use std::simd::num::SimdUint;
 
 #[inline]
-fn parse_value(_buf: &[u8]) -> i16 {    // ~0.5s
+fn parse_value(buf: &[u8]) -> i16 {    // ~0.5s
     // return 0;
-    use std::intrinsics::unlikely;
-    let mut sign = 1;
-    let mut value = 0;
-    for b in _buf {
-        if unlikely(*b == b'-') {
-            sign = -1;
-        }
-        else if unlikely(*b == b'.') {
-            continue;
-        } else {
-            value = value * 10 + (*b - b'0') as i32;
-        }
-    }
-    (value * sign) as i16
+    let scale = u16x4::from_array( [100, 10, 0, 1] );
+    let sign = if buf[0] == b'-' {-1i16} else {1};
+    let offset = if buf[0] == b'-' {1} else {0};
+    let v1 = {
+        let buf = &buf[offset..];
+        let mut arr: [u8; 8] = [b'0' as u8; 8];
+        arr[8 - buf.len()..].copy_from_slice(buf);
+        u16x4::from_array( [ arr[4] as u16, arr[5] as u16, arr[6] as u16, arr[7] as u16 ] )
+    };
+    ((v1 - u16x4::splat('0' as u16))  * scale).reduce_sum() as i16 * sign
+}
+
+#[test]
+fn test_parse_value_simd(){
+    assert_eq!( parse_value("10.2".as_bytes()), 102 );
+    assert_eq!( parse_value("-10.2".as_bytes()), -102 );
+    assert_eq!( parse_value("2.0".as_bytes()), 20 );
+    assert_eq!( parse_value("-2.0".as_bytes()), -20 );
 }
 
 #[inline(never)]
-pub fn ver8() -> Result<HashMap<String,(f32, f32, f32)>, Box<dyn std::error::Error>> {
+pub fn ver9() -> Result<HashMap<String,(f32, f32, f32)>, Box<dyn std::error::Error>> {
 
     let file = std::fs::File::open(MEASUREMENT_FILE)?;
 

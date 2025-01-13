@@ -23,6 +23,7 @@ fn read_line<'a>(reader: &mut std::io::BufReader<std::fs::File>, line: &'a mut V
 
 
 #[allow(dead_code)]
+#[inline(never)]
 pub fn ver3() -> Result<HashMap<String,(f32,f32,f32)>, Box<dyn std::error::Error>> {
 
     let file = std::fs::File::open(MEASUREMENT_FILE)?;

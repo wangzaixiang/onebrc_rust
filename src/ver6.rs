@@ -24,6 +24,7 @@ fn parse_value(_buf: &[u8]) -> i32 {    // ~0.5s
 }
 
 #[allow(dead_code)]
+#[inline(never)]
 pub fn ver6() -> Result<HashMap<String, (f32,f32,f32)>, Box<dyn std::error::Error>> {
 
     let file = std::fs::File::open(MEASUREMENT_FILE)?;

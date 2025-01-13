@@ -61,6 +61,7 @@ impl StateMachine {
 }
 
 #[allow(dead_code)]
+#[inline(never)]
 pub fn ver5() -> Result<HashMap<String, (f32,f32,f32)>, Box<dyn std::error::Error>> {
 
     let file = std::fs::File::open(MEASUREMENT_FILE)?;

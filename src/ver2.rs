@@ -4,6 +4,7 @@ use crate::MEASUREMENT_FILE;
 
 // 132.82s
 #[allow(dead_code)]
+#[inline(never)]
 pub fn ver2() -> Result<HashMap<String, (f32, f32, f32)>, Box<dyn std::error::Error>> {
 
     let file = std::fs::File::open(MEASUREMENT_FILE)?;

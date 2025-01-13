@@ -1,5 +1,10 @@
 #![feature(core_intrinsics)]
 #![feature(portable_simd)]
+#![feature(hasher_prefixfree_extras)]
+#![feature(string_remove_matches)]
+#![feature(unbounded_shifts)]
+#![feature(unchecked_shifts)]
+extern crate core;
 
 use std::collections::HashMap;
 use clap::Parser;
@@ -12,6 +17,13 @@ mod ver5;
 mod ver6;
 mod ver8;
 mod ver7;
+mod ver10;
+mod ver9;
+mod ver11;
+mod ver12;
+mod ver13;
+mod ver14;
+
 #[derive(Parser)]
 #[command(version, author, about)]
 struct Args {
@@ -22,43 +34,11 @@ struct Args {
 
     /// run specific versions v1,v2,..,v8,v9
     #[arg(long)]
-    runs: String,
+    runs: Option<String>,
 
     /// check the result
     #[arg(short, long)]
     check: bool,
-
-    // /// baseline version
-    // #[arg(long)]
-    // v1: bool,
-    //
-    // /// baseline + reader.read_line() than reader.lines(), reuse line String
-    // #[arg(long)]
-    // v2: bool,
-    //
-    // /// v2 + read_line(): (&u8, &u8), no temp String
-    // #[arg(long)]
-    // v3: bool,
-    //
-    // /// v3 + read_line(): (&u8, u64), parse number inline
-    // #[arg(long)]
-    // v4: bool,
-    //
-    // /// v4 + using a StateMachine to parse the input
-    // #[arg(long)]
-    // v5: bool,
-    //
-    // /// v6: using mmap to read the file
-    // #[arg(long)]
-    // v6: bool,
-    //
-    // /// v7: v6 + using FxHashMap than HashMap
-    // #[arg(long)]
-    // v7: bool,
-    //
-    // /// v8: v7 + using simd to parse the input
-    // #[arg(long, default_value = "true")]
-    // v8: bool
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -73,16 +53,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut runs = vec![];
     if args.all {
-        runs = vec!["v1".to_string(), "v2".to_string(), "v3".to_string(), "v4".to_string(), "v5".to_string(), "v6".to_string(), "v7".to_string(), "v8".to_string()];
+        runs = vec!["v1".to_string(), "v2".to_string(), "v3".to_string(), "v4".to_string(), "v5".to_string(), "v6".to_string(),
+                    "v7".to_string(), "v8".to_string(), "v9".to_string(), "v10".to_string(), "v11".to_string(), "v12".to_string()];
     }
 
-    args.runs.split(',').for_each(|v| {
-        let v = &v.trim().to_string();
-        if !runs.contains(v) {
-            runs.push(v.clone());
-        }
-    });
-    runs.sort();
+    if let Some(arg_runs) = args.runs {
+        arg_runs.split(',').for_each(|v| {
+            let v = &v.trim().to_string();
+            if !runs.contains(v) {
+                runs.push(v.clone());
+            }
+        });
+    }
+    runs.sort_by( |a,b| a.clone().remove_matches('v').cmp(&b.clone().remove_matches('v')));
 
     for run in &runs {
        let result = timeit(run, || {
@@ -95,6 +78,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                "v6" => ver6::ver6(),
                "v7" => ver7::ver7(),
                "v8" => ver8::ver8(),       // 23.01s
+               "v9" => ver9::ver9(),       // 23.01s
+               "v10" => ver10::ver10(),
+                "v11" => ver11::ver11(),
+               "v12" => ver12::ver12(),     // 13.44s, TODO!
+               "v13" => ver13::ver13(),
+               "v14" => ver14::ver14(),
                _ => panic!("unknown version")
            }
        })?;
@@ -124,4 +113,4 @@ fn verify(label: &str, hash: &HashMap<String, (f32,f32,f32)>, baseline: &HashMap
     }
 }
 
-const MEASUREMENT_FILE: &str = "/tmp/0108/1brc/measurements.txt";
+const MEASUREMENT_FILE: &str = "measurements.txt";
