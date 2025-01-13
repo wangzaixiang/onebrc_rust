@@ -1,3 +1,5 @@
+cargo-features = ["profile-rustflags"]
+
 [package]
 name = "onebrc_rust"
 version = "0.1.0"
@@ -9,6 +11,8 @@ memchr = "2.7.4"
 rustc-hash = "2.1.0"
 clap = { version = "4.5.11", features = ["derive"] }
 
-[profile.profiling]
+[profile.release]
+rustflags = ["-C", "target-cpu=native"]
 debug = true
-inherits = "release"
+#inherits = "release"
+#overflow-checks = false
