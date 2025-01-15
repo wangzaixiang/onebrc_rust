@@ -4,9 +4,12 @@
 #![feature(string_remove_matches)]
 #![feature(unbounded_shifts)]
 #![feature(unchecked_shifts)]
-extern crate core;
+#![feature(ptr_sub_ptr)]
 
 use std::collections::HashMap;
+use std::intrinsics::transmute;
+use std::simd::{simd_swizzle, u16x16, u8x16};
+use std::simd::num::SimdUint;
 use clap::Parser;
 
 mod ver1;
@@ -23,6 +26,10 @@ mod ver11;
 mod ver12;
 mod ver13;
 mod ver14;
+mod ver15;
+mod ver16;
+mod ver17;
+mod ver18;
 
 #[derive(Parser)]
 #[command(version, author, about)]
@@ -80,10 +87,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                "v8" => ver8::ver8(),       // 23.01s
                "v9" => ver9::ver9(),       // 23.01s
                "v10" => ver10::ver10(),
-                "v11" => ver11::ver11(),
+               "v11" => ver11::ver11(),
                "v12" => ver12::ver12(),     // 13.44s, TODO!
-               "v13" => ver13::ver13(),
-               "v14" => ver14::ver14(),
+               "v13" => ver13::ver13(),     // 8.96s   mask: u64
+               "v14" => ver14::ver14(),     // 13.3s   mask: [u64;4]
+               "v15" => ver15::ver15(),     // 10.57s   mask: u128
+               "v16" => ver16::ver16(),     // based on v13
+               "v17" => ver17::ver17(),     // optimize FileReader
+               "v18" => ver18::ver18(),     // optimize FileReader
                _ => panic!("unknown version")
            }
        })?;
@@ -112,5 +123,9 @@ fn verify(label: &str, hash: &HashMap<String, (f32,f32,f32)>, baseline: &HashMap
         assert!((avg - item.2).abs() < 0.01, "{label} name: {}, avg:{} expect: {}", name, avg, item.2);
     }
 }
+
+
+
+
 
 const MEASUREMENT_FILE: &str = "measurements.txt";
