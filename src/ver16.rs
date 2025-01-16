@@ -4,7 +4,7 @@ use std::mem::{transmute};
 use memchr::{memchr2};
 use crate::MEASUREMENT_FILE;
 
-use std::simd::{i16x16, i8x16, u32x4, u8x64, Mask};
+use std::simd::{i16x16, i8x16, u32x4, u8x64};
 use std::simd::cmp::{SimdPartialEq, SimdPartialOrd};
 use memmap2::Mmap;
 
@@ -108,7 +108,8 @@ struct FileReader {
     buf: *const u8,     // const
     eof: bool,          // has more content
     cursor: usize,      // read_more will update, 当前读取位置，已读取并分析结果保存在 mask 中
-    mask:   u64,        // read_more will set, next will clear
+    mask1:   u64,        // read_more will set, next will clear
+    mask2:   u64,        // read_more will set, next will clear
     line_begin: usize,    // next will update，下一行的开始位置
 }
 
@@ -120,23 +121,24 @@ impl FileReader {
         let u8x64 = u8x64::from_array( unsafe { *( buf as *const[u8;64]) } );
         let mask_v1: u8x64 = u8x64::splat(b';');
         let mask_v2: u8x64 = u8x64::splat(b'\n');
-        let mask: Mask<i8, 64> = u8x64.simd_eq(mask_v1) | u8x64.simd_eq(mask_v2);
-        let mask = mask.to_bitmask();
+        // let mask: Mask<i8, 64> = u8x64.simd_eq(mask_v1) | u8x64.simd_eq(mask_v2);
+        // let mask = mask.to_bitmask();
         FileReader {
             _mmap: mmap,
             length,
             buf,
             eof: false,
             cursor: 0,
-            mask,
+            mask1: u8x64.simd_eq(mask_v1).to_bitmask(),
+            mask2: u8x64.simd_eq(mask_v2).to_bitmask(),
             line_begin: 0
         }
     }
 
     #[inline]
-    fn read_block_at_cursor(&mut self) {
+    fn load_block(&mut self) {
         // change to unlikely fastup from 11.5s ~ 6.65s
-        if unlikely(self.mask == 0) {    // need more
+        // if unlikely(self.mask == 0) {    // need more
 
             self.cursor += 64;
 
@@ -145,13 +147,13 @@ impl FileReader {
                 let mask_v2: u8x64 = u8x64::splat(b'\n');
 
                 let u8x64 = u8x64::from_array( unsafe { *( self.buf.add(self.cursor) as *const[u8;64]) } );
-                let mask: Mask<i8, 64> = u8x64.simd_eq(mask_v1) | u8x64.simd_eq(mask_v2);
-                self.mask = mask.to_bitmask();
+                self.mask1 = u8x64.simd_eq(mask_v1).to_bitmask();
+                self.mask2 = u8x64.simd_eq(mask_v2).to_bitmask();
             }
             else {
                 self.read_last_block();      //
             }
-        }
+        // }
     }
 
     #[inline(never)]
@@ -166,7 +168,12 @@ impl FileReader {
             }
             match memchr2(b';', b'\n', &slice[base..]) {
                 Some(index) => {
-                    self.mask |= 1 << (base+index);
+                    if slice[base + index] == b';' {
+                        self.mask1 |= 1 << (base+index);
+                    }
+                    else {
+                        self.mask2 |= 1 << (base + index);
+                    }
                     base += index+1;
                 }
                 _ => {
@@ -181,17 +188,21 @@ impl FileReader {
 
     fn next(&mut self) -> Option<(&'static [u8], &'static [u8])> {
         if likely(self.eof == false) {
-            self.read_block_at_cursor();
+            if unlikely(self.mask1 == 0) {
+                self.load_block();
+            }
             let first = {
-                let index = self.mask.trailing_zeros();
-                self.mask &= !(1 << index);
+                let index = self.mask1.trailing_zeros();
+                self.mask1 &= !(1 << index);
                 self.cursor + index as usize
             };
 
-            self.read_block_at_cursor();
+            if unlikely(self.mask2 == 0) {
+                self.load_block();
+            }
             let second = {
-                let index = self.mask.trailing_zeros();
-                self.mask &= !(1 << index);
+                let index = self.mask2.trailing_zeros();
+                self.mask2 &= !(1 << index);
                 self.cursor + index as usize
             };
 
@@ -330,7 +341,7 @@ fn process_one(name: &[u8], value: &[u8], aggr: &mut AggrInfo) {
 
 #[inline(never)]
 // based on ver12
-pub fn ver13() -> Result<HashMap<String,(f32, f32, f32)>, Box<dyn std::error::Error>> {     // 8.96s
+pub fn ver16() -> Result<HashMap<String,(f32, f32, f32)>, Box<dyn std::error::Error>> {     // 8.96s
 
     let file = std::fs::File::open(MEASUREMENT_FILE)?;
 
@@ -391,6 +402,7 @@ pub fn ver13() -> Result<HashMap<String,(f32, f32, f32)>, Box<dyn std::error::Er
             let key_b_4 = key_b_4 & MASKS[len_b_4];
 
             let (v1, v2, v3, v4) = unsafe { parse_values(r1_value, r2_value, r3_value, r4_value) };
+            // let (v1, v2, v3, v4) = unsafe { parse_values(r1_value, r2_value, &[b'0', b'.', b'0'], &[b'0', b'.', b'0']) };
             aggr.save_item(r1_name, key_a_1, key_b_1, v1);
             aggr.save_item(r2_name, key_a_2, key_b_2, v2);
             aggr.save_item(r3_name, key_a_3, key_b_3, v3);

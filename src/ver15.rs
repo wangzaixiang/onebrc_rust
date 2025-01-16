@@ -4,7 +4,7 @@ use std::mem::{transmute};
 use memchr::{memchr2};
 use crate::MEASUREMENT_FILE;
 
-use std::simd::{i16x16, i8x16, u32x4, u8x64, Mask};
+use std::simd::{i16x16, i8x16, u32x4, u8x16, u8x64, Mask};
 use std::simd::cmp::{SimdPartialEq, SimdPartialOrd};
 use memmap2::Mmap;
 
@@ -108,7 +108,7 @@ struct FileReader {
     buf: *const u8,     // const
     eof: bool,          // has more content
     cursor: usize,      // read_more will update, 当前读取位置，已读取并分析结果保存在 mask 中
-    mask:   u64,        // read_more will set, next will clear
+    mask:   u128,        // read_more will set, next will clear
     line_begin: usize,    // next will update，下一行的开始位置
 }
 
@@ -117,18 +117,24 @@ impl FileReader {
     fn new(mmap: Mmap) -> FileReader {
         let length = mmap.len();
         let buf = mmap.as_ptr();
-        let u8x64 = u8x64::from_array( unsafe { *( buf as *const[u8;64]) } );
         let mask_v1: u8x64 = u8x64::splat(b';');
         let mask_v2: u8x64 = u8x64::splat(b'\n');
-        let mask: Mask<i8, 64> = u8x64.simd_eq(mask_v1) | u8x64.simd_eq(mask_v2);
-        let mask = mask.to_bitmask();
+
+        let u8x64 = u8x64::from_array( unsafe { *( buf as *const[u8;64]) } );
+        let mask1: Mask<i8, 64> = u8x64.simd_eq(mask_v1) | u8x64.simd_eq(mask_v2);
+        let mask1 = mask1.to_bitmask();
+
+        let u8x64 = u8x64::from_array( unsafe { *( buf.add(64) as *const[u8;64]) } );
+        let mask2: Mask<i8, 64> = u8x64.simd_eq(mask_v1) | u8x64.simd_eq(mask_v2);
+        let mask2 = mask2.to_bitmask();
+
         FileReader {
             _mmap: mmap,
             length,
             buf,
             eof: false,
             cursor: 0,
-            mask,
+            mask: mask1 as u128 | ((mask2 as u128)<< 64),
             line_begin: 0
         }
     }
@@ -138,15 +144,31 @@ impl FileReader {
         // change to unlikely fastup from 11.5s ~ 6.65s
         if unlikely(self.mask == 0) {    // need more
 
-            self.cursor += 64;
+            self.cursor += 128;
 
-            if likely(self.cursor + 64 <= self.length) {
-                let mask_v1: u8x64 = u8x64::splat(b';');
-                let mask_v2: u8x64 = u8x64::splat(b'\n');
+            if likely(self.cursor + 128 <= self.length) {
+                let mask_v1: u8x16 = u8x16::splat(b';');
+                let mask_v2: u8x16 = u8x16::splat(b'\n');
 
-                let u8x64 = u8x64::from_array( unsafe { *( self.buf.add(self.cursor) as *const[u8;64]) } );
-                let mask: Mask<i8, 64> = u8x64.simd_eq(mask_v1) | u8x64.simd_eq(mask_v2);
-                self.mask = mask.to_bitmask();
+                let v1 = u8x16::from_array( unsafe { *( self.buf.add(self.cursor) as *const[u8;16]) } );
+                let v2 = u8x16::from_array( unsafe { *( self.buf.add(self.cursor + 16) as *const[u8;16]) } );
+                let v3 = u8x16::from_array( unsafe { *( self.buf.add(self.cursor + 32) as *const[u8;16]) } );
+                let v4 = u8x16::from_array( unsafe { *( self.buf.add(self.cursor + 48) as *const[u8;16]) } );
+                let v5 = u8x16::from_array( unsafe { *( self.buf.add(self.cursor + 64) as *const[u8;16]) } );
+                let v6 = u8x16::from_array( unsafe { *( self.buf.add(self.cursor + 80) as *const[u8;16]) } );
+                let v7 = u8x16::from_array( unsafe { *( self.buf.add(self.cursor + 96) as *const[u8;16]) } );
+                let v8 = u8x16::from_array( unsafe { *( self.buf.add(self.cursor + 112) as *const[u8;16]) } );
+
+                let v1_mask = (v1.simd_eq(mask_v1) | v1.simd_eq(mask_v2)).to_bitmask() as u128;
+                let v2_mask = (v2.simd_eq(mask_v1) | v2.simd_eq(mask_v2)).to_bitmask() as u128;
+                let v3_mask = (v3.simd_eq(mask_v1) | v3.simd_eq(mask_v2)).to_bitmask() as u128;
+                let v4_mask = (v4.simd_eq(mask_v1) | v4.simd_eq(mask_v2)).to_bitmask() as u128;
+                let v5_mask = (v5.simd_eq(mask_v1) | v5.simd_eq(mask_v2)).to_bitmask() as u128;
+                let v6_mask = (v6.simd_eq(mask_v1) | v6.simd_eq(mask_v2)).to_bitmask() as u128;
+                let v7_mask = (v7.simd_eq(mask_v1) | v7.simd_eq(mask_v2)).to_bitmask() as u128;
+                let v8_mask = (v8.simd_eq(mask_v1) | v8.simd_eq(mask_v2)).to_bitmask() as u128;
+                self.mask = v1_mask | (v2_mask << 16) | (v3_mask << 32) | (v4_mask << 48) |
+                    v5_mask << 64 | v6_mask << 80 | v7_mask << 96 | v8_mask << 112;
             }
             else {
                 self.read_last_block();      //
@@ -330,7 +352,7 @@ fn process_one(name: &[u8], value: &[u8], aggr: &mut AggrInfo) {
 
 #[inline(never)]
 // based on ver12
-pub fn ver13() -> Result<HashMap<String,(f32, f32, f32)>, Box<dyn std::error::Error>> {     // 8.96s
+pub fn ver15() -> Result<HashMap<String,(f32, f32, f32)>, Box<dyn std::error::Error>> {
 
     let file = std::fs::File::open(MEASUREMENT_FILE)?;
 

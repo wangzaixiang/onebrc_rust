@@ -26,3 +26,24 @@ Next Steps:
    - `stations[413]` each (i16, i16, u32, i32)  12*413=5K 很小
    - 基于 u128 key 计算一个 hashCode, 使得几乎不会冲突： 0..20 ^ 20..40 ^ 40..60 ^ 60..80 ^ 80..100 ^ 100..120 ^ 120..128
    将 L1 Cache 发挥到淋漓尽致。
+3. 01-14
+   - 调试汇编
+   - `pos1:[usize;64], pos2: [usize;64]` 保存最多 64 个位置（可管理最大 512 bytes）
+   - `index1，index2` 下一个位置
+   - `end1，end2` 结束位置
+   - 每次最多读取 256 字节，并更新 pos1, pos2, end1, end2
+   - 当 (end2 - index2 + 64) % 64 < 4 时，表示不足 4 行，读取下一个 256 字节, 否则每次处理4行
+- 其他
+  - 检查 u128 的 popcnt
+
+01-16:
+1.  save_item 2.25s
+    - 调整 Item 结构，改为读写一个 u128，减少读写
+    - why p0 ^ p1 ... 1.23s
+2.  计算 str_to_hash 向量化， len -> (len_a, len_b) 位移 key_a << n >> n。0.9s
+    - 长度计算耗时太多，调整为 一组 SIMD 计算？
+3. load_current_64 目前约20G/s, 是否可以更高? 13G / 0.6 = 21G/s.  1.2s
+   - from_slice 增加2个？最多 256 字节？需要2个 v1: ARM 对 u128 的支持是通过2个 u64 来完成的，性能不佳？
+   - pos1, pos2 
+4. process_line 减少计算 - 144ms
+5. parse_value_3 ～460ms 对-号采用向量操作

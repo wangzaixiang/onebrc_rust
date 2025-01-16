@@ -240,6 +240,8 @@ pub fn ver12() -> Result<HashMap<String,(f32, f32, f32)>, Box<dyn std::error::Er
     let mut reader = FileReader::new(mmap);
 
     let mut aggr = AggrInfo::new();
+    let mut max_len = 0usize;
+    let mut min_len = usize::MAX;
 
     // let mut sum = 0;
     let mut callback = |name: &[u8], value: i16| {  // ~13.5s 60%
@@ -260,9 +262,14 @@ pub fn ver12() -> Result<HashMap<String,(f32, f32, f32)>, Box<dyn std::error::Er
     };
 
     while let Some((a,b)) = reader.next() {
+        let len = a.len() + b.len() + 2;
+        max_len = max_len.max(len);
+        min_len = min_len.min(len);
         let value = parse_value(b);
         callback(a, value);
     }
+
+    println!("max_len: {}, min_len: {}", max_len, min_len);
 
     // check dupicated
     // let mut count = 0;

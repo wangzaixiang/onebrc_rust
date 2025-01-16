@@ -95,6 +95,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                "v16" => ver16::ver16(),     // based on v13
                "v17" => ver17::ver17(),     // optimize FileReader
                "v18" => ver18::ver18(),     // optimize FileReader
+               // "compare_str_to_hash" => {
+               //     ver18::compare_str_to_hash();
+               //     Ok(HashMap::new())
+               // } ,
                _ => panic!("unknown version")
            }
        })?;
