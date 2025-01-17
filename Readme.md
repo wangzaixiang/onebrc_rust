@@ -47,3 +47,14 @@ Next Steps:
    - pos1, pos2 
 4. process_line 减少计算 - 144ms
 5. parse_value_3 ～460ms 对-号采用向量操作
+
+01-17 ver20
+1. 重新整理处理流程，最大化减少内存访问
+   - scan_loop read 64 bytes        ~548ms
+   - for each line: read key, value(2)   ~410ms + 410ms
+   - for each line, access aggr     ~ 1380  aggr 4 个字段合并，hash 读取合并
+2. 同时处理最多4个行，提高指令并行度，尽量复用寄存器
+    - 读内存操作尽量提前
+    - 循环内避免对 stack 的内存访问，全部转寄存器，需要查看生成的asm
+3. 位操作优化
+4. key, value parse 再次评估是否合并向量化
