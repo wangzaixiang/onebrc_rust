@@ -58,3 +58,6 @@ Next Steps:
     - 循环内避免对 stack 的内存访问，全部转寄存器，需要查看生成的asm
 3. 位操作优化
 4. key, value parse 再次评估是否合并向量化
+
+01-18:
+1. truncate key 从 normal 版本优化到 simd 版本， 从 797 -> 235ms。
