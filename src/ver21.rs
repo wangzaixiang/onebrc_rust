@@ -481,10 +481,10 @@ impl AggrInfo {
         let hash_code = {
             let p0 = l;
             let p3 = h;
-            let p1 = (l >> 20);
-            let p4 = (h >> 20);
-            let p2 = (l >> 40);
-            let p5 = (h >> 40);
+            let p1 = l >> 20;
+            let p4 = h >> 20;
+            let p2 = l >> 40;
+            let p5 = h >> 40;
             (p0 ^ p1) ^ (p2 ^ p3) ^ (p4 ^ p5)
         };
         (hash_code % (1024*1024)) as u32

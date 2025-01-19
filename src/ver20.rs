@@ -7,7 +7,7 @@ use std::mem::transmute;
 use memmap2::{Mmap, MmapOptions};
 use std::simd::cmp::{SimdPartialEq, SimdPartialOrd};
 use std::simd::num::{SimdInt, SimdUint};
-use std::simd::{i16x16, i64x4, i8x16, i8x32, u16x4, u32x4, u32x8, u64x2, u64x4, u8x16, u8x64, u8x8};
+use std::simd::{i16x16, i16x4, i32x4, i32x8, i64x4, i8x16, i8x32, simd_swizzle, u16x4, u32x4, u32x8, u64x2, u64x4, u8x16, u8x64, u8x8};
 use std::slice::from_raw_parts;
 
 #[cfg(target_arch = "aarch64")]
@@ -237,9 +237,10 @@ impl FileReader {
 
                         let signed = val_preload.simd_eq(i8x32::splat(b'-' as i8))
                             .to_int().rotate_elements_left::<1>();
-                        let signed: i64x4 = unsafe { transmute::<i8x32, i64x4>(signed) };
-                        let signed = signed.simd_eq(i64x4::splat(0))
-                            .select(i64x4::splat(1), i64x4::splat(-1)).cast::<i16>() ;
+                        let signed: i32x8 = unsafe { transmute::<i8x32, i32x8>(signed) };
+                        let signed = signed.simd_eq(i32x8::splat(0))
+                            .select(i32x8::splat(1), i32x8::splat(-1)).cast::<i16>() ;
+                        let signed:i16x4 = simd_swizzle!(signed, [1,3,5,7]);    // each for a val
 
                         let val_preload: u32x8 = unsafe { transmute(val_preload) };
                         let val_preload: u32x4 = u32x4::from_array([val_preload[1], val_preload[3], val_preload[5], val_preload[7]]);
@@ -415,10 +416,10 @@ impl AggrInfo {
         let hash_code = {
             let p0 = l;
             let p3 = h;
-            let p1 = (l >> 20);
-            let p4 = (h >> 20);
-            let p2 = (l >> 40);
-            let p5 = (h >> 40);
+            let p1 = l >> 20;
+            let p4 = h >> 20;
+            let p2 = l >> 40;
+            let p5 = h >> 40;
             (p0 ^ p1) ^ (p2 ^ p3) ^ (p4 ^ p5)
         };
 
@@ -451,10 +452,10 @@ impl AggrInfo {
         let hash_code = {
             let p0 = l;
             let p3 = h;
-            let p1 = (l >> 20);
-            let p4 = (h >> 20);
-            let p2 = (l >> 40);
-            let p5 = (h >> 40);
+            let p1 = l >> 20;
+            let p4 = h >> 20;
+            let p2 = l >> 40;
+            let p5 = h >> 40;
             (p0 ^ p1) ^ (p2 ^ p3) ^ (p4 ^ p5)
         };
         (hash_code % (1024*1024)) as u32

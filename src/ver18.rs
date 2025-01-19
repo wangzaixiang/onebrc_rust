@@ -31,7 +31,7 @@ unsafe fn v_poncnt(v: u16x16) -> u8x16 {
 
     transmute(result)
 }
-unsafe fn parse_value_simd(val1: &[u8]) -> (i16) {
+unsafe fn parse_value_simd(val1: &[u8]) -> i16 {
 
     let pad_1 = 8 - val1.len() as isize;
 
@@ -362,10 +362,10 @@ impl FileReader {
         let hash = {
             let p0 = key_a;
             let p3 = key_b;
-            let p1 = (key_a >> 20);
-            let p4 = (key_b >> 20);
-            let p2 = (key_a >> 40);
-            let p5 = (key_b >> 40);
+            let p1 = key_a >> 20;
+            let p4 = key_b >> 20;
+            let p2 = key_a >> 40;
+            let p5 = key_b >> 40;
             (p0 ^ p1) ^ (p2 ^ p3) ^ (p4 ^ p5)
         };
 
@@ -611,7 +611,7 @@ pub fn ver18() -> Result<HashMap<String,(f32, f32, f32)>, Box<dyn std::error::Er
             .map(&file)?
     };
 
-    let mut reader = FileReader::new(mmap);
+    let reader = FileReader::new(mmap);
 
     // let (pos1, pos2, pos1_count, pos2_count) = unsafe { reader.load_current_128(0) };
 

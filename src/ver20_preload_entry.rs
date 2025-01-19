@@ -6,10 +6,77 @@ use std::mem::transmute;
 use memmap2::{Mmap, MmapOptions};
 use std::simd::cmp::{SimdPartialEq, SimdPartialOrd};
 use std::simd::num::{SimdInt, SimdUint};
-use std::simd::{i16x16, i64x4, i8x16, i8x32, u16x4, u32x4, u32x8, u64x2, u64x4, u8x16, u8x64, u8x8};
+use std::simd::{i16x1, i16x16, i16x2, i16x4, i16x8, i32x2, i32x4, i32x8, i64x4, i8x16, i8x2, i8x32, i8x4, i8x8, simd_swizzle, u16x4, u32x4, u32x8, u64x2, u64x4, u8x16, u8x2, u8x32, u8x4, u8x64, u8x8};
 use std::slice::from_raw_parts;
 
 fn parse_value_u8x8(val: u8x8) -> i16 {
+    // if val1[4] == b'-' || val1[5] == b'-' the number is negative
+    let signed: i8x2 = unsafe { transmute( simd_swizzle!(val, [3, 4]) ) };
+    let signed = signed.simd_eq(i8x2::splat(b'-' as i8)).to_int();
+    let signed: i16 = unsafe { transmute(signed) };
+    let signed = if signed == 0 { 1 } else { -1 };
+
+    let val = val.cast::<i16>();
+
+    let is_digit = val.simd_ge(i16x8::splat(b'0' as i16)) & val.simd_le(i16x8::splat(b'9' as i16));
+
+    let nums: i16x8 = is_digit.select(val, i16x8::splat(b'0' as i16)) - i16x8::splat(b'0' as i16);
+    let mul_scale = nums * i16x8::from_array([0, 0, 0, 0, 100, 10, 0, 1]);
+    let sum = mul_scale + mul_scale.rotate_elements_right::<2>();
+    let sum: i16x8 = sum + sum.rotate_elements_right::<1>();
+    signed * sum[7]
+}
+
+// vals: low -> [ ?, ?, ?,  -, 3, 2, ., 9] <- high
+#[inline]
+fn parse_numbers_batch4(val1: u8x8, val2: u8x8, val3: u8x8, val4: u8x8) -> (i16, i16, i16, i16){
+
+    let vector: i8x32 = unsafe {
+        transmute( u64x4::from_array([ transmute(val1), transmute(val2), transmute(val3), transmute(val4) ]) )};
+
+    // if val1[4] == b'-' || val1[5] == b'-' the number is negative
+    let signed: i8x8 = simd_swizzle!(vector, [3, 4, 11, 12, 19, 20, 27, 28]);
+    let signed = signed.simd_eq(i8x8::splat(b'-' as i8)).to_int();
+    let signed: i16x4 = unsafe { transmute(signed) };
+    let signed: i16x4 = signed.simd_eq(i16x4::splat(0))
+        .select(i16x4::splat(1), i16x4::splat(-1)).cast::<i16>() ;
+
+    let hight_parts: i8x16 = simd_swizzle!(vector, [ 4, 5, 6, 7, 12, 13, 14, 15, 20, 21, 22, 23, 28, 29, 30, 31]);
+
+    let is_digit = hight_parts.simd_ge(i8x16::splat(b'0' as i8)) & hight_parts.simd_le(i8x16::splat(b'9' as i8));
+
+    let nums: i16x16 = is_digit.select(hight_parts, i8x16::splat(b'0' as i8)).cast::<i16>() - i16x16::splat(b'0' as i16);
+    let mul_scale = nums * i16x16::from_array([100, 10, 0, 1, 100, 10, 0, 1, 100, 10, 0, 1,  100, 10, 0, 1]);
+    let sum = mul_scale + mul_scale.rotate_elements_right::<2>();
+    let sum: i16x16 = sum + sum.rotate_elements_right::<1>();
+    (signed[0] * sum[3], signed[1] * sum[7], signed[2] * sum[11], signed[3] * sum[15])
+}
+
+
+// fn process_block64(block0: u8x16, block1: u8x16, block2: u8x16, block3: u8x16) -> (u64, u64) {
+//     // let pos1 = block.simd_eq(u8x64::splat(b';')).to_bitmask() as u64;
+//     // let pos2 = block.simd_eq(u8x64::splat(b'\n')).to_bitmask() as u64;
+//     // (pos1, pos2)
+//
+//     let pos1_0 = block0.simd_eq(u8x16::splat(b';')).to_bitmask() as u64;
+//     let pos2_0 = block0.simd_eq(u8x16::splat(b'\n')).to_bitmask() as u64;
+//     let pos1_1 = block1.simd_eq(u8x16::splat(b';')).to_bitmask() as u64;
+//     let pos2_1 = block1.simd_eq(u8x16::splat(b'\n')).to_bitmask() as u64;
+//     let pos1_2 = block2.simd_eq(u8x16::splat(b';')).to_bitmask() as u64;
+//     let pos2_2 = block2.simd_eq(u8x16::splat(b'\n')).to_bitmask() as u64;
+//     let pos1_3 = block3.simd_eq(u8x16::splat(b';')).to_bitmask() as u64;
+//     let pos2_3 = block3.simd_eq(u8x16::splat(b'\n')).to_bitmask() as u64;
+//
+//     (
+//         pos1_0 | (pos1_1 << 16) | (pos1_2 << 32) | (pos1_3 << 48),
+//         pos2_0 | (pos2_1 << 16) | (pos2_2 << 32) | (pos2_3 << 48),
+//     )
+//
+// }
+
+
+// parse_value_u8x8_old dont process sign and require caller to handle sign
+fn parse_value_u8x8_old(val: u8x8) -> i16 {
     let val = val.cast::<u16>();
     let val = u16x4::from_array([val[4], val[5], val[6], val[7]]);
     let scale: u16x4 = u16x4::from_array([ 100, 10, 0, 1 ]);
@@ -25,7 +92,6 @@ fn parse_value_u8x8(val: u8x8) -> i16 {
     let sum = sum + sum_2;
     sum[3] as i16
 }
-
 
 struct FileReader {
     _mmap: Mmap,         // const
@@ -123,9 +189,12 @@ impl FileReader {
         at as usize
     }
 
+    #[inline]
     fn buffer(&self, offset: usize) -> *const u8 {
         unsafe { self._mmap.as_ptr().add(offset) }
     }
+
+    #[inline]
     fn length(&self) -> usize {
         self._mmap.len()
     }
@@ -137,52 +206,56 @@ impl FileReader {
     }
 
     #[inline]
-    fn preload_val_u64(ptr: *const u8) -> u64 {
-        unsafe { transmute::<u8x8,u64>( u8x8::from_slice( from_raw_parts(ptr, 8) ) ) }
+    fn preload_val_u8x8(ptr: *const u8) -> u8x8 {
+        unsafe { u8x8::from_slice( from_raw_parts(ptr, 8) ) }
     }
 
-
     #[inline(never)]
-    fn scan_loop(&self, _aggr: &mut AggrInfo) {
+    fn scan_loop(&self, aggregator: &mut AggrInfo) {
         let mut cursor: usize = 0;                  // force register, it may add a -x offset
-        let aggregator = _aggr;        // force register
-        let mut last_pos1 = 0u64;       // force register
-        let mut delimiter_poses1 = 0u64;            // force register
-        let mut delimiter_poses2 = 0u64;            // force register
+        let mut last_delimiter1_pos = 0u64;       // force register
+        let mut outer_pos1 = 0u64;            // force register
+        let mut outer_pos2 = 0u64;            // force register
         let mut line_start = 0usize;    // the next line's start position
 
-        let mut debug = Debug::new();
-        let mut block0 : u8x64 = u8x64::from_slice(unsafe { from_raw_parts(self.buffer(0), 64) });
+        let debug = Debug::new();
+        // let mut total_lines = 0;
+
+        let block : u8x64 = u8x64::from_slice(unsafe { from_raw_parts(self.buffer(0), 64) });
+        outer_pos1 = block.simd_eq(u8x64::splat(b';')).to_bitmask() as u64;
+        outer_pos2 = block.simd_eq(u8x64::splat(b'\n')).to_bitmask() as u64;
 
         while likely(cursor < self.length() ) {
             if likely( (cursor + 64) <= self.length() ) {
-                // let block0 = u8x64::from_slice(unsafe { from_raw_parts(self.buffer(cursor), 64) }); // 因为有写入操作，所以有等待读的操作。
-                delimiter_poses1 = block0.simd_eq(u8x64::splat(b';')).to_bitmask() as u64;  // 有多次 load 操作，从stack中去读 block0，没有寄存器化
-                delimiter_poses2 = block0.simd_eq(u8x64::splat(b'\n')).to_bitmask() as u64; //
 
-                // preload next block   move to here than Line 191, -360ms
-                block0 = u8x64::from_slice(unsafe { from_raw_parts(self.buffer(cursor+64), 64) }); // 因为有写入操作，所以有等待读的操作。
+                let mut inner_pos1 = outer_pos1;
+                let mut inner_pos2 = outer_pos2;
 
-                let mut lines = delimiter_poses2.count_ones();
-                // debug.add_count(lines as usize);
+                let mut lines = inner_pos2.count_ones();
+
+                // TODO the following code is not optimized in rustc, it saved block into stack and then load it again,
+                // it shpuld be optimized by using register only
+                let block = u8x64::from_slice(unsafe { from_raw_parts(self.buffer(cursor + 64), 64) });
+                outer_pos1 = block.simd_eq(u8x64::splat(b';')).to_bitmask() as u64;
+                outer_pos2 = block.simd_eq(u8x64::splat(b'\n')).to_bitmask() as u64;
 
                 while likely(lines >= 4) {  // 4..=8
                     // l1: (line_start, l1_pos1, l1_pos2)
-                    let l1_pos1 = if last_pos1 != 0 { cursor - 64 + Self::get_and_clear(&mut last_pos1) } else { cursor + Self::get_and_clear(&mut delimiter_poses1) };
-                    let l1_pos2 = cursor + Self::get_and_clear(&mut delimiter_poses2);
+                    let l1_pos1 = if last_delimiter1_pos != 0 { cursor - 64 + Self::get_and_clear(&mut last_delimiter1_pos) } else { cursor + Self::get_and_clear(&mut inner_pos1) };
+                    let l1_pos2 = cursor + Self::get_and_clear(&mut inner_pos2);
 
                     // l2: (l1_pos2+1, l2_pos1, l2_pos2)
-                    let l2_pos1 = cursor + Self::get_and_clear(&mut delimiter_poses1);
-                    let l2_pos2 = cursor + Self::get_and_clear(&mut delimiter_poses2);
+                    let l2_pos1 = cursor + Self::get_and_clear(&mut inner_pos1);
+                    let l2_pos2 = cursor + Self::get_and_clear(&mut inner_pos2);
                     debug_assert!(l1_pos2 > l1_pos1);
                     debug_assert!(l1_pos2 < l2_pos1);
 
                     // l3: (l2_pos2+1, l3_pos1, l3_pos2)
-                    let l3_pos1 = cursor + Self::get_and_clear(&mut delimiter_poses1);
-                    let l3_pos2 = cursor + Self::get_and_clear(&mut delimiter_poses2);
+                    let l3_pos1 = cursor + Self::get_and_clear(&mut inner_pos1);
+                    let l3_pos2 = cursor + Self::get_and_clear(&mut inner_pos2);
 
-                    let l4_pos1 = cursor + Self::get_and_clear(&mut delimiter_poses1);
-                    let l4_pos2 = cursor + Self::get_and_clear(&mut delimiter_poses2);
+                    let l4_pos1 = cursor + Self::get_and_clear(&mut inner_pos1);
+                    let l4_pos2 = cursor + Self::get_and_clear(&mut inner_pos2);
 
                     // preload memory
                     let l1_preload_key: u64x2 = Self::preload_key_u64x2(self.buffer(line_start));
@@ -190,51 +263,26 @@ impl FileReader {
                     let l3_preload_key: u64x2 = Self::preload_key_u64x2(self.buffer(l2_pos2+1));
                     let l4_preload_key: u64x2 = Self::preload_key_u64x2(self.buffer(l3_pos2+1));
 
-
-                    const VAL_MASK: u64 = 0xFFFF_FFFF_FF00_0000;
                     let (val1, val2, val3, val4) = {
-                        let val_preload_1: u64 = VAL_MASK & Self::preload_val_u64(self.buffer(l1_pos2-8)) ;
-                        let val_preload_2: u64 = VAL_MASK & Self::preload_val_u64(self.buffer(l2_pos2-8)) ;
-                        let val_preload_3: u64 = VAL_MASK & Self::preload_val_u64(self.buffer(l3_pos2-8)) ;
-                        let val_preload_4: u64 = VAL_MASK & Self::preload_val_u64(self.buffer(l4_pos2-8)) ;
+                        let l1_preload_val = Self::preload_val_u8x8(self.buffer(l1_pos2-8)) ;
+                        let l2_preload_val = Self::preload_val_u8x8(self.buffer(l2_pos2-8)) ;
+                        let l3_preload_val = Self::preload_val_u8x8(self.buffer(l3_pos2-8)) ;
+                        let l4_preload_val = Self::preload_val_u8x8(self.buffer(l4_pos2-8)) ;
 
-                        let val_preload: u64x4 = unsafe { u64x4::from_array([ val_preload_1, val_preload_2, val_preload_3, val_preload_4 ]) };
-                        let val_preload: i8x32 = unsafe { transmute::<u64x4,i8x32>(val_preload) };
-
-                        let signed = val_preload.simd_eq(i8x32::splat(b'-' as i8))
-                            .to_int().rotate_elements_left::<1>();
-                        let signed: i64x4 = unsafe { transmute::<i8x32, i64x4>(signed) };
-                        let signed = signed.simd_eq(i64x4::splat(0))
-                            .select(i64x4::splat(1), i64x4::splat(-1)).cast::<i16>() ;
-
-                        let val_preload: u32x8 = unsafe { transmute(val_preload) };
-                        let val_preload: u32x4 = u32x4::from_array([val_preload[1], val_preload[3], val_preload[5], val_preload[7]]);
-                        let val_preload: i8x16 = unsafe { transmute(val_preload) };
-
-                        let is_digit = val_preload.simd_ge(i8x16::splat(b'0' as i8)) & val_preload.simd_le(i8x16::splat(b'9' as i8));
-
-                        let preload: i16x16 = is_digit.select(val_preload, i8x16::splat(b'0' as i8)).cast::<i16>()
-                            - i16x16::splat(b'0' as i16);
-                        let mul_scale = preload * i16x16::from_array([100, 10, 0, 1, 100, 10, 0, 1, 100, 10, 0, 1,  100, 10, 0, 1]);
-                        let sum = mul_scale + mul_scale.rotate_elements_right::<2>();
-                        let sum: i16x16 = sum + sum.rotate_elements_right::<1>();
-                        (signed[0] * sum[3], signed[1] * sum[7], signed[2] * sum[11], signed[3] * sum[15])
-
+                        parse_numbers_batch4(l1_preload_val, l2_preload_val, l3_preload_val, l4_preload_val)
                     };
                     //
-                    let (key1_hash, key2_hash, key3_hash, key4_hash) = (
+                    let (l1_long_hash, l2_long_hash, l3_long_hash, l4_long_hash) = (
                         truncate_key_simd(l1_preload_key, l1_pos1 - line_start),
                         truncate_key_simd(l2_preload_key, l2_pos1 - l1_pos2 - 1),
                         truncate_key_simd(l3_preload_key, l3_pos1 - l2_pos2 - 1),
                         truncate_key_simd(l4_preload_key, l4_pos1 - l3_pos2 - 1)
                         );
 
-                    aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(line_start), l1_pos1 - line_start) }, key1_hash, val1);
-                    aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(l1_pos2 + 1), l2_pos1 - l1_pos2 - 1) }, key2_hash, val2);
-                    aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(l2_pos2 + 1), l3_pos1 - l2_pos2 - 1) }, key3_hash, val3);
-                    aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(l3_pos2 + 1), l4_pos1 - l3_pos2 - 1) }, key4_hash, val4);
-
-
+                    aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(line_start), l1_pos1 - line_start) }, l1_long_hash, val1);
+                    aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(l1_pos2 + 1), l2_pos1 - l1_pos2 - 1) }, l2_long_hash, val2);
+                    aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(l2_pos2 + 1), l3_pos1 - l2_pos2 - 1) }, l3_long_hash, val3);
+                    aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(l3_pos2 + 1), l4_pos1 - l3_pos2 - 1) }, l4_long_hash, val4);
 
                     lines -= 4;
                     line_start = l4_pos2 + 1;
@@ -242,23 +290,16 @@ impl FileReader {
 
 
                 while likely(lines > 0) {
-                    // debug.add_count(LoopAt::Loop1);
-                    // l1: (line_start, l1_pos1, l1_pos2)
-                    let l1_pos1 = if last_pos1 != 0 { cursor - 64 + Self::get_and_clear(&mut last_pos1) } else { cursor + Self::get_and_clear(&mut delimiter_poses1) };
-                    let l1_pos2 = cursor + Self::get_and_clear(&mut delimiter_poses2);
+                    let l1_pos1 = if last_delimiter1_pos != 0 { cursor - 64 + Self::get_and_clear(&mut last_delimiter1_pos) } else { cursor + Self::get_and_clear(&mut inner_pos1) };
+                    let l1_pos2 = cursor + Self::get_and_clear(&mut inner_pos2);
 
-                    // preload memory
-                    let key_preload_1: u64x2 = unsafe {transmute( u8x16::from_slice( from_raw_parts(self.buffer(line_start), 16) ) ) };
-
-
+                    let l1_preload_key: u64x2 = Self::preload_key_u64x2(self.buffer(line_start));
                     let val1 = {
-                        let val_preload_1: u8x8 = u8x8::from_slice(unsafe { from_raw_parts(self.buffer(l1_pos2 - 8 ), 8) });
-                        let val1_sign = val_preload_1.simd_eq(u8x8::splat(b'-')).to_bitmask().trailing_zeros() <= 5;
-                        let val1 = if val1_sign { -1 } else { 1 } * parse_value_u8x8(val_preload_1);
-                        val1
+                        let l1_preload_val =  Self::preload_val_u8x8(self.buffer(l1_pos2-8));
+                        parse_value_u8x8(l1_preload_val)
                     };
-                    //
-                    let key1_hash = truncate_key_simd(key_preload_1, l1_pos1 - line_start);
+
+                    let key1_hash = truncate_key_simd(l1_preload_key, l1_pos1 - line_start);
 
                     aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(line_start), l1_pos1 - line_start) }, key1_hash, val1);
 
@@ -266,8 +307,8 @@ impl FileReader {
                     line_start = l1_pos2 + 1;
                 }
 
-                if last_pos1 == 0 {
-                    last_pos1 = delimiter_poses1;
+                if last_delimiter1_pos == 0 {
+                    last_delimiter1_pos = inner_pos1;
                 }
                 else {
                     // already save last_pos on the last loop
@@ -279,7 +320,7 @@ impl FileReader {
                 cursor = self.length();
             }
         }
-
+        // println!("total lines: {}", total_lines);
         debug.print();
     }
 
@@ -324,9 +365,9 @@ fn truncate_key_simd(key: u64x2, len: usize) -> u64x2 {
 
 #[derive(Clone)]
 #[repr(C, align(64))]
-struct AggrItem {
+struct HashEntry {
     key_hash:  u64x2,     // 0
-    data:      AggrItemValues,
+    data:      Aggregation,
     // min:    i32,     // 16  most write from min to sum
     // max:    i32,     // 20
     // count:  u32,     // 24
@@ -335,34 +376,41 @@ struct AggrItem {
 }
 
 #[derive(Clone, Copy)]
-union AggrItemValues {
-    raw: [u8; 16],
-    expanded: (i32, i32, u32, i32), // min, max, count, sum
+struct Aggregation {
+    min: i32,
+    max: i32,
+    count: u32,
+    sum: i32,
 }
 
-impl AggrItemValues {
-    fn new() -> AggrItemValues {
-        AggrItemValues {
-            raw: [0; 16]
-        }
-    }
+// #[derive(Clone, Copy)]
+// union AggrItemValues {
+//     raw: [u8; 16],
+//     expanded: (i32, i32, u32, i32), // min, max, count, sum
+// }
 
-    fn explot(&self) -> (i32, i32, u32, i32) {
-        unsafe { self.expanded }
+impl Aggregation {
+    fn new() -> Aggregation {
+        Aggregation {
+            min: i32::MAX,
+            max: i32::MIN,
+            count: 0,
+            sum: 0,
+        }
     }
 }
 
 struct AggrInfo {
-    linar_hash_table: Vec<AggrItem>
+    linar_hash_table: Vec<HashEntry>
 }
 
 impl AggrInfo {
 
-    fn new_item() -> AggrItem {
-        AggrItem {
+    fn new_item() -> HashEntry {
+        HashEntry {
             key_hash: u64x2::splat(0),
             key: Vec::new(),
-            data: AggrItemValues::new()
+            data: Aggregation::new()
         }
     }
 
@@ -381,10 +429,10 @@ impl AggrInfo {
         let hash_code = {
             let p0 = l;
             let p3 = h;
-            let p1 = (l >> 20);
-            let p4 = (h >> 20);
-            let p2 = (l >> 40);
-            let p5 = (h >> 40);
+            let p1 = l >> 20;
+            let p4 = h >> 20;
+            let p2 = l >> 40;
+            let p5 = h >> 40;
             (p0 ^ p1) ^ (p2 ^ p3) ^ (p4 ^ p5)
         };
 
@@ -393,18 +441,18 @@ impl AggrInfo {
         let item = unsafe { self.linar_hash_table.get_unchecked_mut(hash_code) };
         if likely(item.key_hash == hash ) {
             debug_assert_eq!(item.key, key);
-            let mut item_values = item.data.explot();
-            item_values.2 += 1;
-            item_values.3 += value as i32;
-            item_values.0 = item_values.0.min(value as i32);
-            item_values.1 = item_values.1.max(value as i32);
-            item.data = AggrItemValues { expanded: item_values };   // 1 store access
+            let mut item_values = item.data;
+            item_values.count += 1;
+            item_values.sum += value as i32;
+            item_values.min = item_values.min.min(value as i32);
+            item_values.max = item_values.max.max(value as i32);
+            item.data = item_values;
             return;
         }
         else if likely(item.key.is_empty()) {
             item.key_hash = hash;
             item.key = key.to_vec();
-            item.data = AggrItemValues { expanded: (value as i32, value as i32, 1, value as i32) };
+            item.data = Aggregation { sum: value as i32,  count:1, min: value as i32, max: value as i32 };
             return;
         }
         else {
@@ -417,10 +465,10 @@ impl AggrInfo {
         let hash_code = {
             let p0 = l;
             let p3 = h;
-            let p1 = (l >> 20);
-            let p4 = (h >> 20);
-            let p2 = (l >> 40);
-            let p5 = (h >> 40);
+            let p1 = l >> 20;
+            let p4 = h >> 20;
+            let p2 = l >> 40;
+            let p5 = h >> 40;
             (p0 ^ p1) ^ (p2 ^ p3) ^ (p4 ^ p5)
         };
         (hash_code % (1024*1024)) as u32
@@ -435,10 +483,10 @@ impl AggrInfo {
         let hash_code_4 = (Self::compute_hash_code(hash4) % (1024*1024)) as usize;
 
         let linar_hash_table = &mut self.linar_hash_table;
-        let item1 = unsafe { &mut *(linar_hash_table.get_unchecked_mut(hash_code_1) as *mut AggrItem) };
-        let item2 = unsafe { &mut * (linar_hash_table.get_unchecked_mut(hash_code_2) as *mut AggrItem) };
-        let item3 = unsafe { &mut * (linar_hash_table.get_unchecked_mut(hash_code_3) as *mut AggrItem) };
-        let item4 = unsafe { &mut * (linar_hash_table.get_unchecked_mut(hash_code_4) as *mut AggrItem) };
+        let item1 = unsafe { &mut *(linar_hash_table.get_unchecked_mut(hash_code_1) as *mut HashEntry) };
+        let item2 = unsafe { &mut * (linar_hash_table.get_unchecked_mut(hash_code_2) as *mut HashEntry) };
+        let item3 = unsafe { &mut * (linar_hash_table.get_unchecked_mut(hash_code_3) as *mut HashEntry) };
+        let item4 = unsafe { &mut * (linar_hash_table.get_unchecked_mut(hash_code_4) as *mut HashEntry) };
 
         // preload data
         let all_matched = {
@@ -450,34 +498,34 @@ impl AggrInfo {
         };
 
         if likely( all_matched ) {
-            let mut key_data_1 = unsafe { item1.data.expanded };
-            let mut key_data_2 = unsafe { item2.data.expanded };
-            let mut key_data_3 = unsafe { item3.data.expanded };
-            let mut key_data_4 = unsafe { item4.data.expanded };
+            let mut key_data_1 = item1.data;
+            let mut key_data_2 = item2.data;
+            let mut key_data_3 = item3.data;
+            let mut key_data_4 = item4.data;
 
-            key_data_1.2 += 1;
-            key_data_1.3 += value1 as i32;
-            key_data_1.0 = key_data_1.0.min(value1 as i32);
-            key_data_1.1 = key_data_1.1.max(value1 as i32);
-            item1.data.expanded = key_data_1;   // 1 store access
+            key_data_1.count += 1;
+            key_data_1.sum += value1 as i32;
+            key_data_1.min = key_data_1.min.min(value1 as i32);
+            key_data_1.max = key_data_1.max.max(value1 as i32);
+            item1.data = key_data_1;
 
-            key_data_2.2 += 1;
-            key_data_2.3 += value2 as i32;
-            key_data_2.0 = key_data_2.0.min(value2 as i32);
-            key_data_2.1 = key_data_2.1.max(value2 as i32);
-            item2.data.expanded =  key_data_2 ;   // 1 store access
+            key_data_2.count += 1;
+            key_data_2.sum += value2 as i32;
+            key_data_2.min = key_data_2.min.min(value2 as i32);
+            key_data_2.max = key_data_2.max.max(value2 as i32);
+            item2.data =  key_data_2 ;   // 1 store access
 
-            key_data_3.2 += 1;
-            key_data_3.3 += value3 as i32;
-            key_data_3.0 = key_data_3.0.min(value3 as i32);
-            key_data_3.1 = key_data_3.1.max(value3 as i32);
-            item3.data.expanded = key_data_3;   // 1 store access
+            key_data_3.count += 1;
+            key_data_3.sum += value3 as i32;
+            key_data_3.min = key_data_3.min.min(value3 as i32);
+            key_data_3.max = key_data_3.max.max(value3 as i32);
+            item3.data = key_data_3;   // 1 store access
 
-            key_data_4.2 += 1;
-            key_data_4.3 += value4 as i32;
-            key_data_4.0 = key_data_4.0.min(value4 as i32);
-            key_data_4.1 = key_data_4.1.max(value4 as i32);
-            item4.data.expanded = key_data_4;   // 1 store access
+            key_data_4.count += 1;
+            key_data_4.sum += value4 as i32;
+            key_data_4.min = key_data_4.min.min(value4 as i32);
+            key_data_4.max = key_data_4.max.max(value4 as i32);
+            item4.data = key_data_4;   // 1 store access
             return;
         }
         else {
@@ -492,29 +540,20 @@ impl AggrInfo {
     #[inline(never)]
     fn slow_save(&mut self, key: &[u8], key_hash: u64x2, value: i16, from: usize) {
         for i in from..from + 1024 {    // search at most 1024 entry
-            let item: &mut AggrItem = &mut self.linar_hash_table[i];
+            let item: &mut HashEntry = &mut self.linar_hash_table[i];
             if unlikely(item.key_hash == key_hash) {
                 debug_assert_eq!(item.key, key);
-                let mut item_values = item.data.explot();
-                item_values.2 += 1;
-                item_values.3 += value as i32;
-                item_values.0 = item_values.0.min(value as i32);
-                item_values.1 = item_values.1.max(value as i32);
-                item.data = AggrItemValues { expanded: item_values };
-                // item.count += 1;
-                // item.sum += value as i32;
-                // item.min = item.min.min(value as i32);
-                // item.max = item.max.max(value as i32);
+                let mut item_values = item.data;
+                item_values.count += 1;
+                item_values.sum += value as i32;
+                item_values.min = item_values.min.min(value as i32);
+                item_values.max = item_values.max.max(value as i32);
+                item.data = item_values;
                 return;
             } else if likely(item.key.is_empty()) {
                 item.key_hash = key_hash;
                 item.key = key.to_vec();
-                item.data = AggrItemValues { expanded: (value as i32, value as i32, 1, value as i32) };
-
-                // item.count = 1;
-                // item.sum = value as i32;
-                // item.min = value as i32;
-                // item.max = value as i32;
+                item.data = Aggregation { sum: value as i32,  count:1, min: value as i32, max: value as i32 };
                 return;
             }
         }

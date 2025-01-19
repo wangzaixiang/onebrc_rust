@@ -7,9 +7,6 @@
 #![feature(ptr_sub_ptr)]
 
 use std::collections::HashMap;
-use std::intrinsics::transmute;
-use std::simd::{simd_swizzle, u16x16, u8x16};
-use std::simd::num::SimdUint;
 use clap::Parser;
 
 mod ver1;
