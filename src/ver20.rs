@@ -110,9 +110,9 @@ impl Debug {
 
     #[cfg(not(feature = "debug"))]
     fn print(&self) {
-        for i in 0..8 {
-            println!("loop{}: {}", i, self.counts[i]);
-        }
+        // for i in 0..8 {
+        //     println!("loop{}: {}", i, self.counts[i]);
+        // }
     }
 }
 
