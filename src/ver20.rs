@@ -175,10 +175,8 @@ impl FileReader {
     }
 
     #[inline(never)]
-    fn ver20_scan_loop(&self, _aggr: &mut AggrInfo) {
+    fn scan_loop(&self, _aggr: &mut AggrInfo) {
         let mut cursor: usize = 0;                  // force register, it may add a -x offset
-        // let buffer: *const u8 = self._mmap.as_ptr();      //
-        // let length = self._mmap.len();             //
         let aggregator = _aggr;        // force register
         let mut last_pos1 = 0u64;       // force register
         let mut pos1 = 0u64;            // force register
@@ -188,11 +186,13 @@ impl FileReader {
         let mut debug = Debug::new();
         let mut block0 : u8x64 = u8x64::from_slice(unsafe { from_raw_parts(self.buffer(0), 64) });
 
-        while cursor < self.length() {
-            if (cursor + 64) <= self.length() {
+        while likely(cursor < self.length() ) {
+            if likely( (cursor + 64) <= self.length() ) {
+                // let block0 = u8x64::from_slice(unsafe { from_raw_parts(self.buffer(cursor), 64) }); // 因为有写入操作，所以有等待读的操作。
                 pos1 = block0.simd_eq(u8x64::splat(b';')).to_bitmask() as u64;  // 有多次 load 操作，从stack中去读 block0，没有寄存器化
                 pos2 = block0.simd_eq(u8x64::splat(b'\n')).to_bitmask() as u64; //
-                // preload next block   TODO cursor + 64 maybe out of bounds, but it works now.
+
+                // preload next block   move to here than Line 191, -360ms
                 block0 = u8x64::from_slice(unsafe { from_raw_parts(self.buffer(cursor+64), 64) }); // 因为有写入操作，所以有等待读的操作。
 
                 let mut lines = pos2.count_ones();
@@ -579,7 +579,7 @@ pub fn ver20() -> Result<HashMap<String,(f32, f32, f32)>, Box<dyn std::error::Er
 
     // println!("pos1: {:x}, pos2: {:x}, pos1_count: {}, pos2_count: {}", pos1, pos2, pos1_count, pos2_count);
     let mut aggr = AggrInfo::new();
-    reader.ver20_scan_loop(&mut aggr);
+    reader.scan_loop(&mut aggr);
 
     check_result(&aggr);
     // check_result(&aggr);

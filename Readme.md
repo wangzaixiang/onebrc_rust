@@ -61,3 +61,4 @@ Next Steps:
 
 01-18:
 1. truncate key 从 normal 版本优化到 simd 版本， 从 797 -> 235ms。
+2. preload 64 bytes, - ~350ms
