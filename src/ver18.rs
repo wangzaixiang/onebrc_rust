@@ -1,15 +1,14 @@
+use crate::MEASUREMENT_FILE;
 use std::arch::asm;
 use std::collections::HashMap;
-use std::error::Error;
 use std::intrinsics::{likely, unlikely};
-use std::mem::{transmute};
-use std::ops::{Mul, Shl, Shr, Sub};
-use crate::MEASUREMENT_FILE;
+use std::mem::transmute;
+use std::ops::{Mul, Shl, Shr};
 
-use std::simd::{i16x16, i16x4, i64x1, i64x2, i64x4, i8x16, i8x4, simd_swizzle, u16x16, u16x8, u32x1, u32x4, u64x1, u64x2, u64x4, u8x16, u8x64, Mask};
+use memmap2::{Mmap, MmapOptions};
 use std::simd::cmp::{SimdOrd, SimdPartialEq, SimdPartialOrd};
 use std::simd::num::{SimdInt, SimdUint};
-use memmap2::{Mmap, MmapOptions};
+use std::simd::{i16x16, i16x4, i64x2, i64x4, i8x16, i8x4, simd_swizzle, u16x16, u32x4, u64x2, u64x4, u8x16, u8x64};
 
 #[cfg(target_arch = "aarch64")]
 unsafe fn v_poncnt(v: u16x16) -> u8x16 {

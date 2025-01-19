@@ -1,5 +1,4 @@
 use crate::MEASUREMENT_FILE;
-use std::arch::asm;
 use std::collections::HashMap;
 use std::intrinsics::{likely, unlikely};
 use std::mem::transmute;
@@ -9,45 +8,6 @@ use std::simd::cmp::{SimdPartialEq, SimdPartialOrd};
 use std::simd::num::{SimdInt, SimdUint};
 use std::simd::{i16x16, i64x4, i8x16, i8x32, u16x4, u32x4, u32x8, u64x2, u64x4, u8x16, u8x64, u8x8};
 use std::slice::from_raw_parts;
-
-#[cfg(target_arch = "aarch64")]
-unsafe fn preload(ptr: *const u8) {
-    asm! {
-    "prfm pldl1keep, [{x}]",
-    "prfm pldl1keep, [{x},128]",
-    "prfm pldl1keep, [{x},256]",
-    "prfm pldl1keep, [{x},384]",
-    "prfm pldl1keep, [{x},512]",
-    "prfm pldl1keep, [{x},640]",
-    "prfm pldl1keep, [{x},768]",
-    "prfm pldl1keep, [{x},896]",
-    "prfm pldl1keep, [{x},1024]",
-    "prfm pldl1keep, [{x},1152]",
-    "prfm pldl1keep, [{x},1280]",
-    "prfm pldl1keep, [{x},1408]",
-    "prfm pldl1keep, [{x},1536]",
-    "prfm pldl1keep, [{x},1664]",
-    "prfm pldl1keep, [{x},1792]",
-    "prfm pldl1keep, [{x},1920]",
-    "prfm pldl1keep, [{x},2048]",
-    "prfm pldl1keep, [{x},2176]",
-    "prfm pldl1keep, [{x},2304]",
-    "prfm pldl1keep, [{x},2432]",
-    "prfm pldl1keep, [{x},2560]",
-    "prfm pldl1keep, [{x},2688]",
-    "prfm pldl1keep, [{x},2816]",
-    "prfm pldl1keep, [{x},2944]",
-    "prfm pldl1keep, [{x},3072]",
-    "prfm pldl1keep, [{x},3200]",
-    "prfm pldl1keep, [{x},3328]",
-    "prfm pldl1keep, [{x},3456]",
-    "prfm pldl1keep, [{x},3584]",
-    "prfm pldl1keep, [{x},3712]",
-    "prfm pldl1keep, [{x},3840]",
-    "prfm pldl1keep, [{x},3968]",
-    x = in(reg) ptr,
-    }
-}
 
 fn parse_value_u8x8(val: u8x8) -> i16 {
     let val = val.cast::<u16>();
@@ -170,13 +130,25 @@ impl FileReader {
         self._mmap.len()
     }
 
+
+    #[inline]
+    fn preload_key_u64x2(ptr: *const u8) -> u64x2 {
+        unsafe { transmute( u8x16::from_slice( from_raw_parts(ptr, 16) ) ) }
+    }
+
+    #[inline]
+    fn preload_val_u64(ptr: *const u8) -> u64 {
+        unsafe { transmute::<u8x8,u64>( u8x8::from_slice( from_raw_parts(ptr, 8) ) ) }
+    }
+
+
     #[inline(never)]
     fn scan_loop(&self, _aggr: &mut AggrInfo) {
         let mut cursor: usize = 0;                  // force register, it may add a -x offset
         let aggregator = _aggr;        // force register
         let mut last_pos1 = 0u64;       // force register
-        let mut pos1 = 0u64;            // force register
-        let mut pos2 = 0u64;            // force register
+        let mut delimiter_poses1 = 0u64;            // force register
+        let mut delimiter_poses2 = 0u64;            // force register
         let mut line_start = 0usize;    // the next line's start position
 
         let mut debug = Debug::new();
@@ -185,52 +157,46 @@ impl FileReader {
         while likely(cursor < self.length() ) {
             if likely( (cursor + 64) <= self.length() ) {
                 // let block0 = u8x64::from_slice(unsafe { from_raw_parts(self.buffer(cursor), 64) }); // 因为有写入操作，所以有等待读的操作。
-                pos1 = block0.simd_eq(u8x64::splat(b';')).to_bitmask() as u64;  // 有多次 load 操作，从stack中去读 block0，没有寄存器化
-                pos2 = block0.simd_eq(u8x64::splat(b'\n')).to_bitmask() as u64; //
+                delimiter_poses1 = block0.simd_eq(u8x64::splat(b';')).to_bitmask() as u64;  // 有多次 load 操作，从stack中去读 block0，没有寄存器化
+                delimiter_poses2 = block0.simd_eq(u8x64::splat(b'\n')).to_bitmask() as u64; //
 
                 // preload next block   move to here than Line 191, -360ms
                 block0 = u8x64::from_slice(unsafe { from_raw_parts(self.buffer(cursor+64), 64) }); // 因为有写入操作，所以有等待读的操作。
 
-                let mut lines = pos2.count_ones();
-                debug.add_count(lines as usize);
+                let mut lines = delimiter_poses2.count_ones();
+                // debug.add_count(lines as usize);
 
                 while likely(lines >= 4) {  // 4..=8
-                    // debug.add_count(LoopAt::Loop4);
-
                     // l1: (line_start, l1_pos1, l1_pos2)
-                    let l1_pos1 = if last_pos1 != 0 { cursor - 64 + Self::get_and_clear(&mut last_pos1) } else { cursor + Self::get_and_clear(&mut pos1) };
-                    let l1_pos2 = cursor + Self::get_and_clear(&mut pos2);
+                    let l1_pos1 = if last_pos1 != 0 { cursor - 64 + Self::get_and_clear(&mut last_pos1) } else { cursor + Self::get_and_clear(&mut delimiter_poses1) };
+                    let l1_pos2 = cursor + Self::get_and_clear(&mut delimiter_poses2);
 
                     // l2: (l1_pos2+1, l2_pos1, l2_pos2)
-                    let l2_pos1 = cursor + Self::get_and_clear(&mut pos1);
-                    let l2_pos2 = cursor + Self::get_and_clear(&mut pos2);
+                    let l2_pos1 = cursor + Self::get_and_clear(&mut delimiter_poses1);
+                    let l2_pos2 = cursor + Self::get_and_clear(&mut delimiter_poses2);
                     debug_assert!(l1_pos2 > l1_pos1);
                     debug_assert!(l1_pos2 < l2_pos1);
 
                     // l3: (l2_pos2+1, l3_pos1, l3_pos2)
-                    let l3_pos1 = cursor + Self::get_and_clear(&mut pos1);
-                    let l3_pos2 = cursor + Self::get_and_clear(&mut pos2);
+                    let l3_pos1 = cursor + Self::get_and_clear(&mut delimiter_poses1);
+                    let l3_pos2 = cursor + Self::get_and_clear(&mut delimiter_poses2);
 
-                    let l4_pos1 = cursor + Self::get_and_clear(&mut pos1);
-                    let l4_pos2 = cursor + Self::get_and_clear(&mut pos2);
+                    let l4_pos1 = cursor + Self::get_and_clear(&mut delimiter_poses1);
+                    let l4_pos2 = cursor + Self::get_and_clear(&mut delimiter_poses2);
 
                     // preload memory
-                    let key_preload_1: u64x2 = unsafe {transmute( u8x16::from_slice( from_raw_parts(self.buffer(line_start), 16) ) ) };
-                    let key_preload_2: u64x2 = unsafe {transmute( u8x16::from_slice( from_raw_parts(self.buffer(l1_pos2 + 1), 16) ) ) };
-                    let key_preload_3: u64x2 = unsafe {transmute( u8x16::from_slice( from_raw_parts(self.buffer( l2_pos2 + 1), 16) ) ) };
-                    let key_preload_4: u64x2 = unsafe {transmute( u8x16::from_slice( from_raw_parts(self.buffer( l3_pos2 + 1), 16) ) ) };
+                    let l1_preload_key: u64x2 = Self::preload_key_u64x2(self.buffer(line_start));
+                    let l2_preload_key: u64x2 = Self::preload_key_u64x2(self.buffer(l1_pos2+1));
+                    let l3_preload_key: u64x2 = Self::preload_key_u64x2(self.buffer(l2_pos2+1));
+                    let l4_preload_key: u64x2 = Self::preload_key_u64x2(self.buffer(l3_pos2+1));
 
 
+                    const VAL_MASK: u64 = 0xFFFF_FFFF_FF00_0000;
                     let (val1, val2, val3, val4) = {
-                        let val_preload_1: u64 = 0xFFFF_FFFF_FF00_0000 &    // keep low 5 bytes
-                            unsafe { transmute::<u8x8,u64>( u8x8::from_slice(unsafe { from_raw_parts(self.buffer(l1_pos2 - 8 ), 8) }) ) };
-                        let val_preload_2: u64 = 0xFFFF_FFFF_FF00_0000 &    // keep low 5 bytes
-                            unsafe { transmute::<u8x8,u64>( u8x8::from_slice(unsafe { from_raw_parts(self.buffer(l2_pos2 - 8 ), 8) }) ) };
-                        let val_preload_3: u64 = 0xFFFF_FFFF_FF00_0000 &    // keep low 5 bytes
-                            unsafe { transmute::<u8x8,u64>( u8x8::from_slice(unsafe { from_raw_parts(self.buffer(l3_pos2 - 8 ), 8) }) ) };
-                        let val_preload_4: u64 = 0xFFFF_FFFF_FF00_0000 &    // keep low 5 bytes
-                            unsafe { transmute::<u8x8,u64>( u8x8::from_slice(unsafe { from_raw_parts(self.buffer(l4_pos2 - 8 ), 8) }) ) };
-
+                        let val_preload_1: u64 = VAL_MASK & Self::preload_val_u64(self.buffer(l1_pos2-8)) ;
+                        let val_preload_2: u64 = VAL_MASK & Self::preload_val_u64(self.buffer(l2_pos2-8)) ;
+                        let val_preload_3: u64 = VAL_MASK & Self::preload_val_u64(self.buffer(l3_pos2-8)) ;
+                        let val_preload_4: u64 = VAL_MASK & Self::preload_val_u64(self.buffer(l4_pos2-8)) ;
 
                         let val_preload: u64x4 = unsafe { u64x4::from_array([ val_preload_1, val_preload_2, val_preload_3, val_preload_4 ]) };
                         let val_preload: i8x32 = unsafe { transmute::<u64x4,i8x32>(val_preload) };
@@ -257,10 +223,10 @@ impl FileReader {
                     };
                     //
                     let (key1_hash, key2_hash, key3_hash, key4_hash) = (
-                            truncate_key_simd(key_preload_1, l1_pos1 - line_start),
-                            truncate_key_simd(key_preload_2, l2_pos1 - l1_pos2 - 1),
-                            truncate_key_simd(key_preload_3, l3_pos1 - l2_pos2 - 1),
-                            truncate_key_simd(key_preload_4, l4_pos1 - l3_pos2 - 1)
+                        truncate_key_simd(l1_preload_key, l1_pos1 - line_start),
+                        truncate_key_simd(l2_preload_key, l2_pos1 - l1_pos2 - 1),
+                        truncate_key_simd(l3_preload_key, l3_pos1 - l2_pos2 - 1),
+                        truncate_key_simd(l4_preload_key, l4_pos1 - l3_pos2 - 1)
                         );
 
                     aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(line_start), l1_pos1 - line_start) }, key1_hash, val1);
@@ -278,8 +244,8 @@ impl FileReader {
                 while likely(lines > 0) {
                     // debug.add_count(LoopAt::Loop1);
                     // l1: (line_start, l1_pos1, l1_pos2)
-                    let l1_pos1 = if last_pos1 != 0 { cursor - 64 + Self::get_and_clear(&mut last_pos1) } else { cursor + Self::get_and_clear(&mut pos1) };
-                    let l1_pos2 = cursor + Self::get_and_clear(&mut pos2);
+                    let l1_pos1 = if last_pos1 != 0 { cursor - 64 + Self::get_and_clear(&mut last_pos1) } else { cursor + Self::get_and_clear(&mut delimiter_poses1) };
+                    let l1_pos2 = cursor + Self::get_and_clear(&mut delimiter_poses2);
 
                     // preload memory
                     let key_preload_1: u64x2 = unsafe {transmute( u8x16::from_slice( from_raw_parts(self.buffer(line_start), 16) ) ) };
@@ -301,7 +267,7 @@ impl FileReader {
                 }
 
                 if last_pos1 == 0 {
-                    last_pos1 = pos1;
+                    last_pos1 = delimiter_poses1;
                 }
                 else {
                     // already save last_pos on the last loop
@@ -559,7 +525,7 @@ impl AggrInfo {
 
 #[inline(never)]
 // based on ver12
-pub fn ver20() -> Result<HashMap<String,(f32, f32, f32)>, Box<dyn std::error::Error>> {     // 8.96s
+pub fn ver20_preload_entry() -> Result<HashMap<String,(f32, f32, f32)>, Box<dyn std::error::Error>> {     // 8.96s
 
     let file = std::fs::File::open(MEASUREMENT_FILE)?;
 

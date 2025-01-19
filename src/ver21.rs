@@ -1,18 +1,14 @@
+use crate::MEASUREMENT_FILE;
 use std::arch::asm;
 use std::collections::HashMap;
-use std::error::Error;
-use std::intrinsics::{likely, offset, unlikely};
-use std::mem::{transmute};
-use std::ops::{BitAnd, Mul, Shl, Shr, Sub};
-use crate::MEASUREMENT_FILE;
+use std::intrinsics::{likely, unlikely};
+use std::mem::transmute;
 
-use std::simd::{i16x16, i16x4, i16x8, i32x4, i32x8, i64x1, i64x2, i64x4, i8x16, i8x32, i8x4, simd_swizzle, u16x16, u16x4, u16x8, u32x1, u32x4, u32x8, u64x1, u64x2, u64x4, u8x1, u8x16, u8x32, u8x64, u8x8, Mask};
-use std::simd::cmp::{SimdOrd, SimdPartialEq, SimdPartialOrd};
-use std::simd::num::{SimdInt, SimdUint};
-use std::slice;
-use std::slice::from_raw_parts;
 use memmap2::{Mmap, MmapOptions};
-use log::debug;
+use std::simd::cmp::{SimdPartialEq, SimdPartialOrd};
+use std::simd::num::{SimdInt, SimdUint};
+use std::simd::{i16x16, i16x8, i32x4, i32x8, i64x2, i8x16, simd_swizzle, u16x8, u64x2, u64x4, u8x16, u8x32, u8x64, u8x8};
+use std::slice::from_raw_parts;
 
 #[cfg(target_arch = "aarch64")]
 unsafe fn preload(ptr: *const u8) {
