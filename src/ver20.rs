@@ -167,73 +167,33 @@ impl FileReader {
         at as usize
     }
 
+    fn buffer(&self, offset: usize) -> *const u8 {
+        unsafe { self._mmap.as_ptr().add(offset) }
+    }
+    fn length(&self) -> usize {
+        self._mmap.len()
+    }
+
     #[inline(never)]
     fn ver20_scan_loop(&self, _aggr: &mut AggrInfo) {
-        // let mut last_pos1: u64 = 0;
-
         let mut cursor: usize = 0;                  // force register, it may add a -x offset
-        let buffer: *const u8 = self._mmap.as_ptr();      //
-        let length = self._mmap.len();             //
+        // let buffer: *const u8 = self._mmap.as_ptr();      //
+        // let length = self._mmap.len();             //
         let aggregator = _aggr;        // force register
         let mut last_pos1 = 0u64;       // force register
         let mut pos1 = 0u64;            // force register
         let mut pos2 = 0u64;            // force register
         let mut line_start = 0usize;    // the next line's start position
 
-        // let mut block11 = u8x16::splat(0);
-        // let mut block12 = u8x16::splat(0);
-        // let mut block13 = u8x16::splat(0);
-        // let mut block14 = u8x16::splat(0);
-        //
-        // unsafe {
-        //     asm!(
-        //     "mov {tmp}, {buffer}",
-        //     "mov {tmp}, {length}",
-        //     "mov {tmp}, {cursor}",
-        //     "mov {tmp}, {aggregator}",      // 4
-        //     "mov {tmp}, {last_pos1}",
-        //     "mov {tmp}, {pos1}",
-        //     "mov {tmp}, {pos2}",
-        //     "mov {tmp}, {line_start}",      // 8
-        //
-        //     "movi.16b {block01}, #0",
-        //     "movi.16b {block02}, #0",
-        //     "movi.16b {block03}, #0",
-        //     "movi.16b {block04}, #0",
-        //     "movi.16b {block11}, #0",
-        //     "movi.16b {block12}, #0",
-        //     "movi.16b {block13}, #0",
-        //     "movi.16b {block14}, #0",
-        //     buffer = in(reg) buffer,
-        //     length = in(reg) length,
-        //     cursor = inout(reg) cursor,
-        //     aggregator = in(reg) aggregator,
-        //     last_pos1 = inout(reg) last_pos1,
-        //     pos1 = inout(reg) pos1,
-        //     pos2 = inout(reg) pos2,
-        //     line_start = inout(reg) line_start,
-        //
-        //     block01 = inout(vreg) block01,
-        //     block02 = inout(vreg) block02,
-        //     block03 = inout(vreg) block03,
-        //     block04 = inout(vreg) block04,
-        //     block11 = inout(vreg) block11,
-        //     block12 = inout(vreg) block12,
-        //     block13 = inout(vreg) block13,
-        //     block14 = inout(vreg) block14,
-        //     tmp = out(reg) _,
-        //     );
-        // }
-
         let mut debug = Debug::new();
-        let mut block0 : u8x64 = u8x64::from_slice(unsafe { from_raw_parts(buffer, 64) });
+        let mut block0 : u8x64 = u8x64::from_slice(unsafe { from_raw_parts(self.buffer(0), 64) });
 
-        while cursor < length {
-            if (cursor + 64) <= length {
+        while cursor < self.length() {
+            if (cursor + 64) <= self.length() {
                 pos1 = block0.simd_eq(u8x64::splat(b';')).to_bitmask() as u64;  // 有多次 load 操作，从stack中去读 block0，没有寄存器化
                 pos2 = block0.simd_eq(u8x64::splat(b'\n')).to_bitmask() as u64; //
                 // preload next block   TODO cursor + 64 maybe out of bounds, but it works now.
-                block0 = u8x64::from_slice(unsafe { from_raw_parts(buffer.add(cursor+64), 64) }); // 因为有写入操作，所以有等待读的操作。
+                block0 = u8x64::from_slice(unsafe { from_raw_parts(self.buffer(cursor+64), 64) }); // 因为有写入操作，所以有等待读的操作。
 
                 let mut lines = pos2.count_ones();
                 debug.add_count(lines as usize);
@@ -259,21 +219,21 @@ impl FileReader {
                     let l4_pos2 = cursor + Self::get_and_clear(&mut pos2);
 
                     // preload memory
-                    let key_preload_1: u64x2 = unsafe {transmute( u8x16::from_slice( from_raw_parts(buffer.add(line_start), 16) ) ) };
-                    let key_preload_2: u64x2 = unsafe {transmute( u8x16::from_slice( from_raw_parts(buffer.add(l1_pos2 + 1), 16) ) ) };
-                    let key_preload_3: u64x2 = unsafe {transmute( u8x16::from_slice( from_raw_parts(buffer.add( l2_pos2 + 1), 16) ) ) };
-                    let key_preload_4: u64x2 = unsafe {transmute( u8x16::from_slice( from_raw_parts(buffer.add( l3_pos2 + 1), 16) ) ) };
+                    let key_preload_1: u64x2 = unsafe {transmute( u8x16::from_slice( from_raw_parts(self.buffer(line_start), 16) ) ) };
+                    let key_preload_2: u64x2 = unsafe {transmute( u8x16::from_slice( from_raw_parts(self.buffer(l1_pos2 + 1), 16) ) ) };
+                    let key_preload_3: u64x2 = unsafe {transmute( u8x16::from_slice( from_raw_parts(self.buffer( l2_pos2 + 1), 16) ) ) };
+                    let key_preload_4: u64x2 = unsafe {transmute( u8x16::from_slice( from_raw_parts(self.buffer( l3_pos2 + 1), 16) ) ) };
 
 
                     let (val1, val2, val3, val4) = {
                         let val_preload_1: u64 = 0xFFFF_FFFF_FF00_0000 &    // keep low 5 bytes
-                            unsafe { transmute::<u8x8,u64>( u8x8::from_slice(unsafe { from_raw_parts(buffer.add(l1_pos2 - 8 ), 8) }) ) };
+                            unsafe { transmute::<u8x8,u64>( u8x8::from_slice(unsafe { from_raw_parts(self.buffer(l1_pos2 - 8 ), 8) }) ) };
                         let val_preload_2: u64 = 0xFFFF_FFFF_FF00_0000 &    // keep low 5 bytes
-                            unsafe { transmute::<u8x8,u64>( u8x8::from_slice(unsafe { from_raw_parts(buffer.add(l2_pos2 - 8 ), 8) }) ) };
+                            unsafe { transmute::<u8x8,u64>( u8x8::from_slice(unsafe { from_raw_parts(self.buffer(l2_pos2 - 8 ), 8) }) ) };
                         let val_preload_3: u64 = 0xFFFF_FFFF_FF00_0000 &    // keep low 5 bytes
-                            unsafe { transmute::<u8x8,u64>( u8x8::from_slice(unsafe { from_raw_parts(buffer.add(l3_pos2 - 8 ), 8) }) ) };
+                            unsafe { transmute::<u8x8,u64>( u8x8::from_slice(unsafe { from_raw_parts(self.buffer(l3_pos2 - 8 ), 8) }) ) };
                         let val_preload_4: u64 = 0xFFFF_FFFF_FF00_0000 &    // keep low 5 bytes
-                            unsafe { transmute::<u8x8,u64>( u8x8::from_slice(unsafe { from_raw_parts(buffer.add(l4_pos2 - 8 ), 8) }) ) };
+                            unsafe { transmute::<u8x8,u64>( u8x8::from_slice(unsafe { from_raw_parts(self.buffer(l4_pos2 - 8 ), 8) }) ) };
 
 
                         let val_preload: u64x4 = unsafe { u64x4::from_array([ val_preload_1, val_preload_2, val_preload_3, val_preload_4 ]) };
@@ -307,28 +267,10 @@ impl FileReader {
                             truncate_key_simd(key_preload_4, l4_pos1 - l3_pos2 - 1)
                         );
 
-                    // execute pipeline optimize
-                    // A: get line1 poses, get line2 poses, get line3 poses, get line4 poses
-                    //    load key1, val1, key2, val2, key3, val3, key4, val4
-                    //    calc key1_hash, key2_hash, key3_hash, key4_hash, calc val1, val2, val3, val4
-                    //    save1, save2, save3, save4
-                    // B: get line1 poses, load key1, val1
-                    //    get line2 poses, load key2, val2, calc key1_hash, num1, load hash_item1
-                    //    get line3 poses, load key3, val3, calc key2 hash, num2, load hash_item2, save1
-                    //    get line4 poses, load key4, val4, calc key3 hash, num3, load hash_item3, save2
-                    //    calc key4 hash, num4, load hash_item4, save3, save4
-
-                    // aggregator.batch_save_item(
-                    //     unsafe { from_raw_parts(buffer.add(line_start), l1_pos1 - line_start) }, key1_hash, val1,
-                    //     unsafe { from_raw_parts(buffer.add(l1_pos2 + 1), l2_pos1 - l1_pos2 - 1)}, key2_hash, val2,
-                    //     unsafe { from_raw_parts(buffer.add(l2_pos2 + 1), l3_pos1 - l2_pos2 - 1) }, key3_hash, val3,
-                    //     unsafe { from_raw_parts(buffer.add(l3_pos2 + 1), l4_pos1 - l3_pos2 - 1) }, key4_hash, val4,
-                    // );
-
-                    aggregator.save_item_u64x2(unsafe { from_raw_parts(buffer.add(line_start), l1_pos1 - line_start) }, key1_hash, val1);
-                    aggregator.save_item_u64x2(unsafe { from_raw_parts(buffer.add(l1_pos2 + 1), l2_pos1 - l1_pos2 - 1) }, key2_hash, val2);
-                    aggregator.save_item_u64x2(unsafe { from_raw_parts(buffer.add(l2_pos2 + 1), l3_pos1 - l2_pos2 - 1) }, key3_hash, val3);
-                    aggregator.save_item_u64x2(unsafe { from_raw_parts(buffer.add(l3_pos2 + 1), l4_pos1 - l3_pos2 - 1) }, key4_hash, val4);
+                    aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(line_start), l1_pos1 - line_start) }, key1_hash, val1);
+                    aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(l1_pos2 + 1), l2_pos1 - l1_pos2 - 1) }, key2_hash, val2);
+                    aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(l2_pos2 + 1), l3_pos1 - l2_pos2 - 1) }, key3_hash, val3);
+                    aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(l3_pos2 + 1), l4_pos1 - l3_pos2 - 1) }, key4_hash, val4);
 
 
 
@@ -344,11 +286,11 @@ impl FileReader {
                     let l1_pos2 = cursor + Self::get_and_clear(&mut pos2);
 
                     // preload memory
-                    let key_preload_1: u64x2 = unsafe {transmute( u8x16::from_slice( from_raw_parts(buffer.add(line_start), 16) ) ) };
+                    let key_preload_1: u64x2 = unsafe {transmute( u8x16::from_slice( from_raw_parts(self.buffer(line_start), 16) ) ) };
 
 
                     let val1 = {
-                        let val_preload_1: u8x8 = u8x8::from_slice(unsafe { from_raw_parts(buffer.add(l1_pos2 - 8 ), 8) });
+                        let val_preload_1: u8x8 = u8x8::from_slice(unsafe { from_raw_parts(self.buffer(l1_pos2 - 8 ), 8) });
                         let val1_sign = val_preload_1.simd_eq(u8x8::splat(b'-')).to_bitmask().trailing_zeros() <= 5;
                         let val1 = if val1_sign { -1 } else { 1 } * parse_value_u8x8(val_preload_1);
                         val1
@@ -356,7 +298,7 @@ impl FileReader {
                     //
                     let key1_hash = truncate_key_simd(key_preload_1, l1_pos1 - line_start);
 
-                    aggregator.save_item_u64x2(unsafe { from_raw_parts(buffer.add(line_start), l1_pos1 - line_start) }, key1_hash, val1);
+                    aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(line_start), l1_pos1 - line_start) }, key1_hash, val1);
 
                     lines -= 1;
                     line_start = l1_pos2 + 1;
@@ -372,7 +314,7 @@ impl FileReader {
             }
             else {
                 println!("process last block");
-                cursor = length;
+                cursor = self.length();
             }
         }
 
