@@ -2,7 +2,7 @@
 
 use std::arch::asm;
 use std::simd::cmp::SimdPartialEq;
-use std::simd::{u8x16, u8x64};
+use std::simd::u8x16;
 
 fn main() {
 

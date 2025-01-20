@@ -1,5 +1,4 @@
 use crate::MEASUREMENT_FILE;
-use std::arch::asm;
 use std::collections::HashMap;
 use std::intrinsics::{likely, unlikely};
 use std::mem::transmute;
@@ -7,47 +6,8 @@ use std::mem::transmute;
 use memmap2::{Mmap, MmapOptions};
 use std::simd::cmp::{SimdPartialEq, SimdPartialOrd};
 use std::simd::num::{SimdInt, SimdUint};
-use std::simd::{i16x16, i16x4, i32x4, i32x8, i64x4, i8x16, i8x32, simd_swizzle, u16x4, u32x4, u32x8, u64x2, u64x4, u8x16, u8x64, u8x8};
+use std::simd::{i16x16, i16x4, i32x8, i8x16, i8x32, simd_swizzle, u16x4, u32x4, u32x8, u64x2, u64x4, u8x16, u8x64, u8x8};
 use std::slice::from_raw_parts;
-
-#[cfg(target_arch = "aarch64")]
-unsafe fn preload(ptr: *const u8) {
-    asm! {
-    "prfm pldl1keep, [{x}]",
-    "prfm pldl1keep, [{x},128]",
-    "prfm pldl1keep, [{x},256]",
-    "prfm pldl1keep, [{x},384]",
-    "prfm pldl1keep, [{x},512]",
-    "prfm pldl1keep, [{x},640]",
-    "prfm pldl1keep, [{x},768]",
-    "prfm pldl1keep, [{x},896]",
-    "prfm pldl1keep, [{x},1024]",
-    "prfm pldl1keep, [{x},1152]",
-    "prfm pldl1keep, [{x},1280]",
-    "prfm pldl1keep, [{x},1408]",
-    "prfm pldl1keep, [{x},1536]",
-    "prfm pldl1keep, [{x},1664]",
-    "prfm pldl1keep, [{x},1792]",
-    "prfm pldl1keep, [{x},1920]",
-    "prfm pldl1keep, [{x},2048]",
-    "prfm pldl1keep, [{x},2176]",
-    "prfm pldl1keep, [{x},2304]",
-    "prfm pldl1keep, [{x},2432]",
-    "prfm pldl1keep, [{x},2560]",
-    "prfm pldl1keep, [{x},2688]",
-    "prfm pldl1keep, [{x},2816]",
-    "prfm pldl1keep, [{x},2944]",
-    "prfm pldl1keep, [{x},3072]",
-    "prfm pldl1keep, [{x},3200]",
-    "prfm pldl1keep, [{x},3328]",
-    "prfm pldl1keep, [{x},3456]",
-    "prfm pldl1keep, [{x},3584]",
-    "prfm pldl1keep, [{x},3712]",
-    "prfm pldl1keep, [{x},3840]",
-    "prfm pldl1keep, [{x},3968]",
-    x = in(reg) ptr,
-    }
-}
 
 fn parse_value_u8x8(val: u8x8) -> i16 {
     let val = val.cast::<u16>();
@@ -71,46 +31,6 @@ struct FileReader {
     _mmap: Mmap,         // const
 }
 
-struct Debug {
-    counts: [u64; 8]
-}
-enum LoopAt {
-    Loop1,
-    Loop4,
-}
-
-impl Debug {
-    fn new() -> Debug {
-        Debug {
-            counts: [0; 8]
-        }
-    }
-
-    #[cfg(feature = "debug")]
-    fn add_count(&mut self, at: LoopAt) {
-        match at {
-            LoopAt::Loop1 => self.loop1 += 1,
-            LoopAt::Loop4 => self.loop4 += 1,
-        }
-    }
-
-    #[cfg(not(feature = "debug"))]
-    fn add_count(&mut self, lines: usize) {
-        // self.counts[lines-1] += 1;
-    }
-
-    #[cfg(feature = "debug")]
-    fn print(&self) {
-        println!("loop1: {}, loop4: {}", self.loop1, self.loop4);
-    }
-
-    #[cfg(not(feature = "debug"))]
-    fn print(&self) {
-        // for i in 0..8 {
-        //     println!("loop{}: {}", i, self.counts[i]);
-        // }
-    }
-}
 
 impl FileReader {
 
@@ -136,25 +56,6 @@ impl FileReader {
         sum
     }
 
-    /// load 128 bytes, 3 ~ 16 lines,
-    /// (pos1: u128, pos2: u128, pos1_count: usize, pos2_count: usize)
-    #[inline]
-    fn load_current_64(buffer: *const u8, cursor: usize) -> (u64, u64) {
-        let ptr = unsafe { buffer.add(cursor) };
-        let v1 = u8x64::from_slice(unsafe { std::slice::from_raw_parts(ptr, 64) });
-
-        let pos1 = v1.simd_eq(u8x64::splat(b';')).to_bitmask() as u64;
-        let pos2 = v1.simd_eq(u8x64::splat(b'\n')).to_bitmask() as u64;
-        (pos1, pos2)
-    }
-
-    #[inline]
-    fn parse_block(block: u8x64) -> (u64, u64) {
-        let pos1 = block.simd_eq(u8x64::splat(b';')).to_bitmask() as u64;
-        let pos2 = block.simd_eq(u8x64::splat(b'\n')).to_bitmask() as u64;
-        (pos1, pos2)
-    }
-
     #[inline]
     fn get_and_clear(pos: &mut u64) -> usize {
         let at = pos.trailing_zeros();
@@ -175,11 +76,10 @@ impl FileReader {
         let mut cursor: usize = 0;                  // force register, it may add a -x offset
         let aggregator = _aggr;        // force register
         let mut last_pos1 = 0u64;       // force register
-        let mut pos1 = 0u64;            // force register
-        let mut pos2 = 0u64;            // force register
+        let mut pos1 ;            // force register
+        let mut pos2 ;            // force register
         let mut line_start = 0usize;    // the next line's start position
 
-        let mut debug = Debug::new();
         let mut block0 : u8x64 = u8x64::from_slice(unsafe { from_raw_parts(self.buffer(0), 64) });
 
         while likely(cursor < self.length() ) {
@@ -192,7 +92,6 @@ impl FileReader {
                 block0 = u8x64::from_slice(unsafe { from_raw_parts(self.buffer(cursor+64), 64) }); // 因为有写入操作，所以有等待读的操作。
 
                 let mut lines = pos2.count_ones();
-                debug.add_count(lines as usize);
 
                 while likely(lines >= 4) {  // 4..=8
                     // debug.add_count(LoopAt::Loop4);
@@ -223,16 +122,16 @@ impl FileReader {
 
                     let (val1, val2, val3, val4) = {
                         let val_preload_1: u64 = 0xFFFF_FFFF_FF00_0000 &    // keep low 5 bytes
-                            unsafe { transmute::<u8x8,u64>( u8x8::from_slice(unsafe { from_raw_parts(self.buffer(l1_pos2 - 8 ), 8) }) ) };
+                            unsafe { transmute::<u8x8,u64>( u8x8::from_slice( from_raw_parts(self.buffer(l1_pos2 - 8 ), 8) ) ) };
                         let val_preload_2: u64 = 0xFFFF_FFFF_FF00_0000 &    // keep low 5 bytes
-                            unsafe { transmute::<u8x8,u64>( u8x8::from_slice(unsafe { from_raw_parts(self.buffer(l2_pos2 - 8 ), 8) }) ) };
+                            unsafe { transmute::<u8x8,u64>( u8x8::from_slice(from_raw_parts(self.buffer(l2_pos2 - 8 ), 8) ) ) };
                         let val_preload_3: u64 = 0xFFFF_FFFF_FF00_0000 &    // keep low 5 bytes
-                            unsafe { transmute::<u8x8,u64>( u8x8::from_slice(unsafe { from_raw_parts(self.buffer(l3_pos2 - 8 ), 8) }) ) };
+                            unsafe { transmute::<u8x8,u64>( u8x8::from_slice(from_raw_parts(self.buffer(l3_pos2 - 8 ), 8) ) ) };
                         let val_preload_4: u64 = 0xFFFF_FFFF_FF00_0000 &    // keep low 5 bytes
-                            unsafe { transmute::<u8x8,u64>( u8x8::from_slice(unsafe { from_raw_parts(self.buffer(l4_pos2 - 8 ), 8) }) ) };
+                            unsafe { transmute::<u8x8,u64>( u8x8::from_slice(from_raw_parts(self.buffer(l4_pos2 - 8 ), 8) ) ) };
 
 
-                        let val_preload: u64x4 = unsafe { u64x4::from_array([ val_preload_1, val_preload_2, val_preload_3, val_preload_4 ]) };
+                        let val_preload: u64x4 = u64x4::from_array([ val_preload_1, val_preload_2, val_preload_3, val_preload_4 ]) ;
                         let val_preload: i8x32 = unsafe { transmute::<u64x4,i8x32>(val_preload) };
 
                         let signed = val_preload.simd_eq(i8x32::splat(b'-' as i8))
@@ -315,39 +214,9 @@ impl FileReader {
             }
         }
 
-        debug.print();
     }
 
 }
-
-const MASKS: [u64;9] = [
-    0,
-    0x0000_0000_0000_00FF,
-    0x0000_0000_0000_FFFF,
-    0x0000_0000_00FF_FFFF,
-    0x0000_0000_FFFF_FFFF,
-    0x0000_00FF_FFFF_FFFF,
-    0x0000_FFFF_FFFF_FFFF,
-    0x00FF_FFFF_FFFF_FFFF,
-    0xFFFF_FFFF_FFFF_FFFF,
-];
-
-#[inline]
-fn truncate_key_normal(key: u64x2, len: usize) -> u64x2 {
-    let len_l = len.min(8);     // 1..=8
-    let len_h = (len - len_l).min(8);   // 0..=8
-    let key_l = key[0] & MASKS[len_l];
-    let key_h = key[1] & MASKS[len_h];
-    // let key_l = key[0] & (u64::MAX >> (64 - 8 * len_l));
-    // let key_h = key[1] & (u64::MAX >> (64 - 8 * len_h));
-
-    // let key_l = key[0] & (u64::MAX >> (64 - 8 * len_l));
-    // let key_h = key[1] & (if len_h == 0 { 0 } else { u64::MAX >> (64 - 8 * len_h) });
-
-    u64x2::from_array([key_l, key_h])
-
-}
-
 #[inline]
 fn truncate_key_simd(key: u64x2, len: usize) -> u64x2 {
     let key: u8x16 = unsafe { transmute(key) };
@@ -446,83 +315,6 @@ impl AggrInfo {
             self.slow_save(key, hash, value, hash_code);
         }
     }
-
-    fn compute_hash_code(hash: u64x2) -> u32 {
-        let (l, h) = (hash[0], hash[1]);
-        let hash_code = {
-            let p0 = l;
-            let p3 = h;
-            let p1 = l >> 20;
-            let p4 = h >> 20;
-            let p2 = l >> 40;
-            let p5 = h >> 40;
-            (p0 ^ p1) ^ (p2 ^ p3) ^ (p4 ^ p5)
-        };
-        (hash_code % (1024*1024)) as u32
-    }
-
-    #[inline]
-    fn batch_save_item(&mut self, key1: &[u8], hash1: u64x2, value1: i16, key2: &[u8], hash2: u64x2, value2: i16,
-                       key3: &[u8], hash3: u64x2, value3: i16, key4: &[u8], hash4: u64x2, value4: i16) {
-        let hash_code_1 = (Self::compute_hash_code(hash1) % (1024*1024)) as usize;
-        let hash_code_2 = (Self::compute_hash_code(hash2) % (1024*1024)) as usize;
-        let hash_code_3 = (Self::compute_hash_code(hash3) % (1024*1024)) as usize;
-        let hash_code_4 = (Self::compute_hash_code(hash4) % (1024*1024)) as usize;
-
-        let linar_hash_table = &mut self.linar_hash_table;
-        let item1 = unsafe { &mut *(linar_hash_table.get_unchecked_mut(hash_code_1) as *mut AggrItem) };
-        let item2 = unsafe { &mut * (linar_hash_table.get_unchecked_mut(hash_code_2) as *mut AggrItem) };
-        let item3 = unsafe { &mut * (linar_hash_table.get_unchecked_mut(hash_code_3) as *mut AggrItem) };
-        let item4 = unsafe { &mut * (linar_hash_table.get_unchecked_mut(hash_code_4) as *mut AggrItem) };
-
-        // preload data
-        let all_matched = {
-            let key_hash1 = item1.key_hash;
-            let key_hash2 = item2.key_hash;
-            let key_hash3 = item3.key_hash;
-            let key_hash4 = item4.key_hash;
-            key_hash1 == hash1 && key_hash2 == hash2 && key_hash3 == hash3 && key_hash4 == hash4
-        };
-
-        if likely( all_matched ) {
-            let mut key_data_1 = unsafe { item1.data.expanded };
-            let mut key_data_2 = unsafe { item2.data.expanded };
-            let mut key_data_3 = unsafe { item3.data.expanded };
-            let mut key_data_4 = unsafe { item4.data.expanded };
-
-            key_data_1.2 += 1;
-            key_data_1.3 += value1 as i32;
-            key_data_1.0 = key_data_1.0.min(value1 as i32);
-            key_data_1.1 = key_data_1.1.max(value1 as i32);
-            item1.data.expanded = key_data_1;   // 1 store access
-
-            key_data_2.2 += 1;
-            key_data_2.3 += value2 as i32;
-            key_data_2.0 = key_data_2.0.min(value2 as i32);
-            key_data_2.1 = key_data_2.1.max(value2 as i32);
-            item2.data.expanded =  key_data_2 ;   // 1 store access
-
-            key_data_3.2 += 1;
-            key_data_3.3 += value3 as i32;
-            key_data_3.0 = key_data_3.0.min(value3 as i32);
-            key_data_3.1 = key_data_3.1.max(value3 as i32);
-            item3.data.expanded = key_data_3;   // 1 store access
-
-            key_data_4.2 += 1;
-            key_data_4.3 += value4 as i32;
-            key_data_4.0 = key_data_4.0.min(value4 as i32);
-            key_data_4.1 = key_data_4.1.max(value4 as i32);
-            item4.data.expanded = key_data_4;   // 1 store access
-            return;
-        }
-        else {
-            self.save_item_u64x2(key1, hash1, value1);
-            self.save_item_u64x2(key2, hash2, value2);
-            self.save_item_u64x2(key3, hash3, value3);
-            self.save_item_u64x2(key4, hash4, value4);
-        }
-    }
-
 
     #[inline(never)]
     fn slow_save(&mut self, key: &[u8], key_hash: u64x2, value: i16, from: usize) {

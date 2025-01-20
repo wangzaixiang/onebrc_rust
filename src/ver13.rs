@@ -1,12 +1,12 @@
+use crate::MEASUREMENT_FILE;
+use memchr::memchr2;
 use std::collections::HashMap;
 use std::intrinsics::{likely, unlikely};
-use std::mem::{transmute};
-use memchr::{memchr2};
-use crate::MEASUREMENT_FILE;
+use std::mem::transmute;
 
-use std::simd::{i16x16, i8x16, u32x4, u8x64, Mask};
-use std::simd::cmp::{SimdPartialEq, SimdPartialOrd};
 use memmap2::Mmap;
+use std::simd::cmp::{SimdPartialEq, SimdPartialOrd};
+use std::simd::{i16x16, i8x16, u32x4, u8x64, Mask};
 
 #[inline]
 fn parse_value(_buf: &[u8]) -> i16 {    // ~0.5s
@@ -415,24 +415,3 @@ pub fn ver13() -> Result<HashMap<String,(f32, f32, f32)>, Box<dyn std::error::Er
 
     Ok( HashMap::new() )
 }
-
-fn check_result(aggr: &AggrInfo) {
-    let mut count = 0;
-    for i in 0.. aggr.hashes.len() {
-        let item = & aggr.hashes[i];
-        if !item.key.is_empty() {
-            count += 1;
-            let check = if i> 0 {
-                item.key_a == aggr.hashes[i-1].key_a && item.key_b == aggr.hashes[i-1].key_b
-            }
-            else {
-                false
-            };
-            let key = unsafe { std::str::from_utf8_unchecked( item.key.as_slice() ) };
-            println!("{};\t{}\t{}", key, i, check);
-        }
-    }
-    assert_eq!(count, 413);
-    println!("total entries: {}", count);
-}
-

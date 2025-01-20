@@ -1,6 +1,6 @@
+use crate::MEASUREMENT_FILE;
 use std::collections::HashMap;
 use std::io::BufRead;
-use crate::MEASUREMENT_FILE;
 
 #[inline]
 fn read_line<'a>(reader: &mut std::io::BufReader<std::fs::File>, line: &'a mut Vec<u8>) -> Result<Option<(&'a [u8], i64)>, Box<dyn std::error::Error>> {

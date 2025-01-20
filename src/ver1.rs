@@ -1,6 +1,6 @@
+use crate::MEASUREMENT_FILE;
 use std::collections::HashMap;
 use std::io::BufRead;
-use crate::MEASUREMENT_FILE;
 
 // 132.82s
 #[allow(dead_code)]

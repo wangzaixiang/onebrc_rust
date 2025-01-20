@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use crate::MEASUREMENT_FILE;
 use memchr::memchr;
 use memmap2::Mmap;
-use crate::MEASUREMENT_FILE;
+use std::collections::HashMap;
 
 
 #[inline]

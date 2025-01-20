@@ -24,7 +24,6 @@ debug = true
 
 [profile.profiling]
 debug = true
-required-features = ["debug"]
 inherits = "release"
 #overflow-checks = false
 

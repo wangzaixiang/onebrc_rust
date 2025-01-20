@@ -1,5 +1,4 @@
 use crate::MEASUREMENT_FILE;
-use std::arch::asm;
 use std::collections::HashMap;
 use std::intrinsics::{likely, unlikely};
 use std::mem::transmute;
@@ -9,45 +8,6 @@ use std::simd::cmp::{SimdPartialEq, SimdPartialOrd};
 use std::simd::num::{SimdInt, SimdUint};
 use std::simd::{i16x16, i16x8, i32x4, i32x8, i64x2, i8x16, simd_swizzle, u16x8, u64x2, u64x4, u8x16, u8x32, u8x64, u8x8};
 use std::slice::from_raw_parts;
-
-#[cfg(target_arch = "aarch64")]
-unsafe fn preload(ptr: *const u8) {
-    asm! {
-    "prfm pldl1keep, [{x}]",
-    "prfm pldl1keep, [{x},128]",
-    "prfm pldl1keep, [{x},256]",
-    "prfm pldl1keep, [{x},384]",
-    "prfm pldl1keep, [{x},512]",
-    "prfm pldl1keep, [{x},640]",
-    "prfm pldl1keep, [{x},768]",
-    "prfm pldl1keep, [{x},896]",
-    "prfm pldl1keep, [{x},1024]",
-    "prfm pldl1keep, [{x},1152]",
-    "prfm pldl1keep, [{x},1280]",
-    "prfm pldl1keep, [{x},1408]",
-    "prfm pldl1keep, [{x},1536]",
-    "prfm pldl1keep, [{x},1664]",
-    "prfm pldl1keep, [{x},1792]",
-    "prfm pldl1keep, [{x},1920]",
-    "prfm pldl1keep, [{x},2048]",
-    "prfm pldl1keep, [{x},2176]",
-    "prfm pldl1keep, [{x},2304]",
-    "prfm pldl1keep, [{x},2432]",
-    "prfm pldl1keep, [{x},2560]",
-    "prfm pldl1keep, [{x},2688]",
-    "prfm pldl1keep, [{x},2816]",
-    "prfm pldl1keep, [{x},2944]",
-    "prfm pldl1keep, [{x},3072]",
-    "prfm pldl1keep, [{x},3200]",
-    "prfm pldl1keep, [{x},3328]",
-    "prfm pldl1keep, [{x},3456]",
-    "prfm pldl1keep, [{x},3584]",
-    "prfm pldl1keep, [{x},3712]",
-    "prfm pldl1keep, [{x},3840]",
-    "prfm pldl1keep, [{x},3968]",
-    x = in(reg) ptr,
-    }
-}
 
 /// low [ x x x ; - 3 1 .2  ] high
 fn parse_value_u8x8(val: u8x8) -> i16 {
@@ -103,46 +63,6 @@ struct FileReader {
     _mmap: Mmap,         // const
 }
 
-struct Debug {
-    counts: [u64; 8]
-}
-enum LoopAt {
-    Loop1,
-    Loop4,
-}
-
-impl Debug {
-    fn new() -> Debug {
-        Debug {
-            counts: [0; 8]
-        }
-    }
-
-    #[cfg(feature = "debug")]
-    fn add_count(&mut self, at: LoopAt) {
-        match at {
-            LoopAt::Loop1 => self.loop1 += 1,
-            LoopAt::Loop4 => self.loop4 += 1,
-        }
-    }
-
-    #[cfg(not(feature = "debug"))]
-    fn add_count(&mut self, lines: usize) {
-        // self.counts[lines-1] += 1;
-    }
-
-    #[cfg(feature = "debug")]
-    fn print(&self) {
-        println!("loop1: {}, loop4: {}", self.loop1, self.loop4);
-    }
-
-    #[cfg(not(feature = "debug"))]
-    fn print(&self) {
-        for i in 0..8 {
-            println!("loop{}: {}", i, self.counts[i]);
-        }
-    }
-}
 
 impl FileReader {
 
@@ -166,25 +86,6 @@ impl FileReader {
             println!("sum: {}", sum);
         }
         sum
-    }
-
-    /// load 128 bytes, 3 ~ 16 lines,
-    /// (pos1: u128, pos2: u128, pos1_count: usize, pos2_count: usize)
-    #[inline]
-    fn load_current_64(buffer: *const u8, cursor: usize) -> (u64, u64) {
-        let ptr = unsafe { buffer.add(cursor) };
-        let v1 = u8x64::from_slice(unsafe { std::slice::from_raw_parts(ptr, 64) });
-
-        let pos1 = v1.simd_eq(u8x64::splat(b';')).to_bitmask() as u64;
-        let pos2 = v1.simd_eq(u8x64::splat(b'\n')).to_bitmask() as u64;
-        (pos1, pos2)
-    }
-
-    #[inline]
-    fn parse_block(block: u8x64) -> (u64, u64) {
-        let pos1 = block.simd_eq(u8x64::splat(b';')).to_bitmask() as u64;
-        let pos2 = block.simd_eq(u8x64::splat(b'\n')).to_bitmask() as u64;
-        (pos1, pos2)
     }
 
     #[inline]
@@ -213,8 +114,8 @@ impl FileReader {
         let buffer: *const u8 = self._mmap.as_ptr();      //
         let length = self._mmap.len();             //
         let mut last_pos1 = 0u64;       // force register
-        let mut pos1 = 0u64;            // force register
-        let mut pos2 = 0u64;            // force register
+        let mut pos1 ;            // force register
+        let mut pos2 ;            // force register
         let mut line_start = 0usize;    // the next line's start position
         let hash_table = _aggr.linar_hash_table.as_mut_ptr();        // force register
 
@@ -345,34 +246,6 @@ impl FileReader {
 
 }
 
-const MASKS: [u64;9] = [
-    0,
-    0x0000_0000_0000_00FF,
-    0x0000_0000_0000_FFFF,
-    0x0000_0000_00FF_FFFF,
-    0x0000_0000_FFFF_FFFF,
-    0x0000_00FF_FFFF_FFFF,
-    0x0000_FFFF_FFFF_FFFF,
-    0x00FF_FFFF_FFFF_FFFF,
-    0xFFFF_FFFF_FFFF_FFFF,
-];
-
-#[inline]
-fn truncate_key_normal(key: u64x2, len: usize) -> u64x2 {
-    let len_l = len.min(8);     // 1..=8
-    let len_h = (len - len_l).min(8);   // 0..=8
-    let key_l = key[0] & MASKS[len_l];
-    let key_h = key[1] & MASKS[len_h];
-    // let key_l = key[0] & (u64::MAX >> (64 - 8 * len_l));
-    // let key_h = key[1] & (u64::MAX >> (64 - 8 * len_h));
-
-    // let key_l = key[0] & (u64::MAX >> (64 - 8 * len_l));
-    // let key_h = key[1] & (if len_h == 0 { 0 } else { u64::MAX >> (64 - 8 * len_h) });
-
-    u64x2::from_array([key_l, key_h])
-
-}
-
 #[inline]
 fn truncate_key_simd(key: u64x2, len: usize) -> u64x2 {
     let key: u8x16 = unsafe { transmute(key) };
@@ -446,7 +319,6 @@ impl AggrInfo {
 
     #[inline]
     fn save_item_u64x2(&mut self, key: &[u8], hash: u64x2, value: i16) {
-        let (l, h) = (hash[0], hash[1]);
         let hash_code =  Self::compute_hash_code(hash) as usize;
 
         let hash_entry: &mut HashEntry = unsafe { self.linar_hash_table.get_unchecked_mut(hash_code) };

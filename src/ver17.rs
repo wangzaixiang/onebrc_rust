@@ -1,14 +1,13 @@
-use std::arch::asm;
-use std::collections::HashMap;
-use std::intrinsics::{likely};
-use std::mem::{transmute};
-use std::ops::{BitAnd, Shl};
 use crate::MEASUREMENT_FILE;
+use std::collections::HashMap;
+use std::intrinsics::likely;
+use std::mem::transmute;
+use std::ops::{BitAnd, Shl};
 
-use std::simd::{i16x16, i8x16, simd_swizzle, u16x16, u16x8, u32x4, u8x16, Mask};
+use memmap2::{Mmap, MmapOptions};
 use std::simd::cmp::{SimdPartialEq, SimdPartialOrd};
 use std::simd::num::{SimdInt, SimdUint};
-use memmap2::{Mmap, MmapOptions};
+use std::simd::{i16x16, i8x16, simd_swizzle, u16x16, u16x8, u32x4, u8x16, Mask};
 
 #[inline]
 fn parse_value(_buf: &[u8]) -> i16 {    // ~0.5s
@@ -50,45 +49,6 @@ unsafe fn v_poncnt(v: u16x16) -> u8x16 {
     // println!("result: {:?}", result);
 
     transmute(result)
-}
-
-#[cfg(target_arch = "aarch64")]
-unsafe fn preload(ptr: *const u8) {
-    asm! {
-        "prfm pldl1keep, [{x}]",
-        "prfm pldl1keep, [{x},128]",
-        "prfm pldl1keep, [{x},256]",
-        "prfm pldl1keep, [{x},384]",
-        "prfm pldl1keep, [{x},512]",
-        "prfm pldl1keep, [{x},640]",
-        "prfm pldl1keep, [{x},768]",
-        "prfm pldl1keep, [{x},896]",
-        "prfm pldl1keep, [{x},1024]",
-        "prfm pldl1keep, [{x},1152]",
-        "prfm pldl1keep, [{x},1280]",
-        "prfm pldl1keep, [{x},1408]",
-        "prfm pldl1keep, [{x},1536]",
-        "prfm pldl1keep, [{x},1664]",
-        "prfm pldl1keep, [{x},1792]",
-        "prfm pldl1keep, [{x},1920]",
-        "prfm pldl1keep, [{x},2048]",
-        "prfm pldl1keep, [{x},2176]",
-        "prfm pldl1keep, [{x},2304]",
-        "prfm pldl1keep, [{x},2432]",
-        "prfm pldl1keep, [{x},2560]",
-        "prfm pldl1keep, [{x},2688]",
-        "prfm pldl1keep, [{x},2816]",
-        "prfm pldl1keep, [{x},2944]",
-        "prfm pldl1keep, [{x},3072]",
-        "prfm pldl1keep, [{x},3200]",
-        "prfm pldl1keep, [{x},3328]",
-        "prfm pldl1keep, [{x},3456]",
-        "prfm pldl1keep, [{x},3584]",
-        "prfm pldl1keep, [{x},3712]",
-        "prfm pldl1keep, [{x},3840]",
-        "prfm pldl1keep, [{x},3968]",
-        x = in(reg) ptr,
-    }
 }
 
 unsafe fn parse_values(val1: &[u8], val2: &[u8], val3: &[u8], val4: &[u8]) -> (i16, i16, i16, i16) {
@@ -280,9 +240,6 @@ impl FileReader {
                 // process 0..pos2_count
                 if let Some(mut last_p1) = last_pos1 {
                     last_p1 -= 128;
-                    let x1 = (last_p1 as u128) & 0xFF;
-                    let x2 = pos1 << 8;
-                    let x3 = x1 | x2;
                     pos1 = ((last_p1 as u128) & 0xFF) | (pos1 << 8);
                     pos1_count += 1;
                 }
@@ -325,8 +282,8 @@ impl FileReader {
                 }
 
                 while pos2_count > 0 { // process the last 1..3 lines
-                    let pos1_1 = cursor as isize + unsafe { (pos1 & 0xFF) as isize };
-                    let pos2_1 = cursor as isize + unsafe { (pos2 & 0xFF) as isize };
+                    let pos1_1 = cursor as isize +  (pos1 & 0xFF) as isize ;
+                    let pos2_1 = cursor as isize +  (pos2 & 0xFF) as isize ;
                     let (key, val) = self.process_line(line_start, pos1_1, pos2_1);
                     let (key_a, key_b) = str_to_hash(key);
                     let value = parse_value(val);

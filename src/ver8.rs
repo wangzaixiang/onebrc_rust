@@ -1,12 +1,12 @@
-use std::collections::HashMap;
-use std::intrinsics::{likely, unlikely};
-use memchr::{memchr2};
+use crate::MEASUREMENT_FILE;
+use memchr::memchr2;
 use memmap2::Mmap;
 use rustc_hash::FxHashMap;
-use crate::MEASUREMENT_FILE;
+use std::collections::HashMap;
+use std::intrinsics::{likely, unlikely};
 
-use std::simd::{u8x64};
 use std::simd::cmp::SimdPartialEq;
+use std::simd::u8x64;
 
 #[inline]
 fn parse_value(_buf: &[u8]) -> i16 {    // ~0.5s

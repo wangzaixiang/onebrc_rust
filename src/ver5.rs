@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use std::io::{Read};
 use crate::MEASUREMENT_FILE;
+use std::collections::HashMap;
+use std::io::Read;
 
 
 enum State {

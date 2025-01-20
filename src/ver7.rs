@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use crate::MEASUREMENT_FILE;
 use memchr::memchr;
 use memmap2::Mmap;
 use rustc_hash::FxHashMap;
-use crate::MEASUREMENT_FILE;
+use std::collections::HashMap;
 
 
 #[inline]

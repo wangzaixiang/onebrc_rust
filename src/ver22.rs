@@ -6,7 +6,7 @@ use std::mem::transmute;
 use memmap2::{Mmap, MmapOptions};
 use std::simd::cmp::{SimdPartialEq, SimdPartialOrd};
 use std::simd::num::{SimdInt, SimdUint};
-use std::simd::{i16x1, i16x16, i16x2, i16x4, i16x8, i32x2, i32x4, i32x8, i64x4, i8x16, i8x2, i8x32, i8x4, i8x8, simd_swizzle, u16x4, u32x4, u32x8, u64x2, u64x4, u8x16, u8x2, u8x32, u8x4, u8x64, u8x8};
+use std::simd::{i16x16, i16x4, i16x8, i8x16, i8x2, i8x32, i8x8, simd_swizzle, u64x2, u64x4, u8x16, u8x64, u8x8};
 use std::slice::from_raw_parts;
 
 fn parse_value_u8x8(val: u8x8) -> i16 {
@@ -74,68 +74,8 @@ fn parse_numbers_batch4(val1: u8x8, val2: u8x8, val3: u8x8, val4: u8x8) -> (i16,
 //
 // }
 
-
-// parse_value_u8x8_old dont process sign and require caller to handle sign
-fn parse_value_u8x8_old(val: u8x8) -> i16 {
-    let val = val.cast::<u16>();
-    let val = u16x4::from_array([val[4], val[5], val[6], val[7]]);
-    let scale: u16x4 = u16x4::from_array([ 100, 10, 0, 1 ]);
-    let mask = val.simd_ge(u16x4::splat(b'0' as u16)) ;
-    let val = mask.select(val, u16x4::splat(b'0' as u16));
-    let sub = val - u16x4::splat(b'0' as u16);      // (c - '0')
-    let mul = sub * scale;                                // (c - '0') * scale
-
-    let mul_2 = mul.rotate_elements_right::<2>();       // 100 + 0, 10 + 1
-    let sum = mul + mul_2;
-
-    let sum_2 = sum.rotate_elements_right::<1>();       // 100 + 0 + 10 + 1
-    let sum = sum + sum_2;
-    sum[3] as i16
-}
-
 struct FileReader {
     _mmap: Mmap,         // const
-}
-
-struct Debug {
-    counts: [u64; 8]
-}
-enum LoopAt {
-    Loop1,
-    Loop4,
-}
-
-impl Debug {
-    fn new() -> Debug {
-        Debug {
-            counts: [0; 8]
-        }
-    }
-
-    #[cfg(feature = "debug")]
-    fn add_count(&mut self, at: LoopAt) {
-        match at {
-            LoopAt::Loop1 => self.loop1 += 1,
-            LoopAt::Loop4 => self.loop4 += 1,
-        }
-    }
-
-    #[cfg(not(feature = "debug"))]
-    fn add_count(&mut self, lines: usize) {
-        // self.counts[lines-1] += 1;
-    }
-
-    #[cfg(feature = "debug")]
-    fn print(&self) {
-        println!("loop1: {}, loop4: {}", self.loop1, self.loop4);
-    }
-
-    #[cfg(not(feature = "debug"))]
-    fn print(&self) {
-        // for i in 0..8 {
-        //     println!("loop{}: {}", i, self.counts[i]);
-        // }
-    }
 }
 
 impl FileReader {
@@ -162,24 +102,7 @@ impl FileReader {
         sum
     }
 
-    /// load 128 bytes, 3 ~ 16 lines,
-    /// (pos1: u128, pos2: u128, pos1_count: usize, pos2_count: usize)
-    #[inline]
-    fn load_current_64(buffer: *const u8, cursor: usize) -> (u64, u64) {
-        let ptr = unsafe { buffer.add(cursor) };
-        let v1 = u8x64::from_slice(unsafe { std::slice::from_raw_parts(ptr, 64) });
 
-        let pos1 = v1.simd_eq(u8x64::splat(b';')).to_bitmask() as u64;
-        let pos2 = v1.simd_eq(u8x64::splat(b'\n')).to_bitmask() as u64;
-        (pos1, pos2)
-    }
-
-    #[inline]
-    fn parse_block(block: u8x64) -> (u64, u64) {
-        let pos1 = block.simd_eq(u8x64::splat(b';')).to_bitmask() as u64;
-        let pos2 = block.simd_eq(u8x64::splat(b'\n')).to_bitmask() as u64;
-        (pos1, pos2)
-    }
 
     #[inline]
     fn get_and_clear(pos: &mut u64) -> usize {
@@ -213,8 +136,8 @@ impl FileReader {
     fn scan_loop(&self, aggregator: &mut AggrHashTable) {
         let mut cursor: usize = 0;                  // force register, it may add a -x offset
         let mut last_delimiter1_pos = 0u64;       // force register
-        let mut outer_pos1 = 0u64;            // force register
-        let mut outer_pos2 = 0u64;            // force register
+        let mut outer_pos1 ;            // force register
+        let mut outer_pos2 ;            // force register
         let mut line_start = 0usize;    // the next line's start position
 
         let block : u8x64 = u8x64::from_slice(unsafe { from_raw_parts(self.buffer(0), 64) });
@@ -320,19 +243,6 @@ impl FileReader {
     }
 
 }
-
-const MASKS: [u64;9] = [
-    0,
-    0x0000_0000_0000_00FF,
-    0x0000_0000_0000_FFFF,
-    0x0000_0000_00FF_FFFF,
-    0x0000_0000_FFFF_FFFF,
-    0x0000_00FF_FFFF_FFFF,
-    0x0000_FFFF_FFFF_FFFF,
-    0x00FF_FFFF_FFFF_FFFF,
-    0xFFFF_FFFF_FFFF_FFFF,
-];
-
 #[inline]
 fn truncate_key_simd(key: u64x2, len: usize) -> (u64,u64) {
     let key: u8x16 = unsafe { transmute(key) };

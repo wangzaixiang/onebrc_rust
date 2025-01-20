@@ -1,13 +1,13 @@
-use std::collections::HashMap;
-use std::intrinsics::{likely, unlikely};
-use memchr::{memchr2};
+use crate::MEASUREMENT_FILE;
+use memchr::memchr2;
 use memmap2::Mmap;
 use rustc_hash::FxHashMap;
-use crate::MEASUREMENT_FILE;
+use std::collections::HashMap;
+use std::intrinsics::{likely, unlikely};
 
-use std::simd::{u16x4, u8x64};
 use std::simd::cmp::SimdPartialEq;
 use std::simd::num::SimdUint;
+use std::simd::{u16x4, u8x64};
 
 #[inline]
 fn parse_value(buf: &[u8]) -> i16 {    // ~0.5s
@@ -22,124 +22,6 @@ fn parse_value(buf: &[u8]) -> i16 {    // ~0.5s
         u16x4::from_array( [ arr[4] as u16, arr[5] as u16, arr[6] as u16, arr[7] as u16 ] )
     };
     ((v1 - u16x4::splat('0' as u16))  * scale).reduce_sum() as i16 * sign
-}
-
-fn parse_name(buf: &[u8]) -> (u64, u64) {
-    let len = buf.len();
-    let mut ptr = buf.as_ptr() as *const u64 as usize;
-
-    // process align
-    let part0: u64;
-        let count = ptr % 4;
-        if count == 0 {
-            part0 = 0;
-        }
-        else {
-            let mut result = 0u64;
-            let mut shift = 0u64;
-            for i in 0..count {
-                result = result | ((buf[i] as u64) << shift);
-                shift += 8;
-            }
-            part0 = result;
-        }
-
-    ptr += count;
-    let part1 = unsafe { u64::from_le_bytes( *(ptr as *const[u8;8]) ) };
-    let part2 = unsafe { u64::from_le_bytes( *((ptr + 8) as *const[u8;8]) ) };
-
-    // part0[0..count*8] .. part1[0..64-count*8], part1[64-count*8..64] .. part2[0..64-count*8]
-    let num1;
-    let num2;
-    if count > 0 {
-        num1 = part0 | (part1 << (count * 8));
-        num2 = (part1 >> (64 - count * 8)) | (part2 << (count * 8));
-    }
-    else {
-        num1 = part1;
-        num2 = part2;
-    }
-    let bits1: u32 = if len <= 8 { len as u32 } else { 8 } * 8;
-    let bits2: u32 = if len > 8 { (len as u32 - 8).min(8) } else { 0 } * 8;
-
-    // clear top (64-bits1) bit of num1
-    let num1 = num1 & ( u64::MAX.unbounded_shr(64-bits1) );
-    let num2 = num2 & ( u64::MAX.unbounded_shr (64-bits2) );
-
-    (num1, num2)
-}
-
-#[test]
-fn test_parse_name(){
-    let buf = [0x11u8, 0x22, 0x33, 0x44,
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-        0x0F, 0x0E, 0x0D, 0x0C, 0x0B, 0x0A, 0x09, 0x08,
-        0xAA];
-    {
-        assert_eq!(parse_name(&buf[4..8]), (0x04030201, 0));
-        assert_eq!(parse_name(&buf[4..9]), (0x0504030201, 0));
-        assert_eq!(parse_name(&buf[4..10]), (0x060504030201, 0));
-        assert_eq!(parse_name(&buf[4..11]), (0x07060504030201, 0));
-        assert_eq!(parse_name(&buf[4..12]), (0x0807060504030201, 0));
-        assert_eq!(parse_name(&buf[4..13]), (0x0807060504030201, 0x0F));
-        assert_eq!(parse_name(&buf[4..14]), (0x0807060504030201, 0x0E0F));
-        assert_eq!(parse_name(&buf[4..15]), (0x0807060504030201, 0x0D0E0F));
-        assert_eq!(parse_name(&buf[4..16]), (0x0807060504030201, 0x0C0D0E0F));
-        assert_eq!(parse_name(&buf[4..17]), (0x0807060504030201, 0x0B0C0D0E0F));
-        assert_eq!(parse_name(&buf[4..18]), (0x0807060504030201, 0x0A0B0C0D0E0F));
-        assert_eq!(parse_name(&buf[4..19]), (0x0807060504030201, 0x090A0B0C0D0E0F));
-        assert_eq!(parse_name(&buf[4..20]), (0x0807060504030201, 0x08090A0B0C0D0E0F));
-        assert_eq!(parse_name(&buf[4..21]), (0x0807060504030201, 0x08090A0B0C0D0E0F));
-    }
-    {
-        assert_eq!(parse_name(&buf[1..5]), (0x01443322, 0));
-        assert_eq!(parse_name(&buf[1..6]), (0x0201443322, 0));
-        assert_eq!(parse_name(&buf[1..7]), (0x030201443322, 0));
-        assert_eq!(parse_name(&buf[1..8]), (0x04030201443322, 0));
-        assert_eq!(parse_name(&buf[1..9]), (0x0504030201443322, 0));
-        assert_eq!(parse_name(&buf[1..10]), (0x0504030201443322, 0x06));
-        assert_eq!(parse_name(&buf[1..11]), (0x0504030201443322, 0x0706));
-        assert_eq!(parse_name(&buf[1..12]), (0x0504030201443322, 0x080706));
-        assert_eq!(parse_name(&buf[1..13]), (0x0504030201443322, 0x0F080706));
-        assert_eq!(parse_name(&buf[1..14]), (0x0504030201443322, 0x0E0F080706));
-        assert_eq!(parse_name(&buf[1..15]), (0x0504030201443322, 0x0D0E0F080706));
-        assert_eq!(parse_name(&buf[1..16]), (0x0504030201443322, 0x0C0D0E0F080706));
-        assert_eq!(parse_name(&buf[1..17]), (0x0504030201443322, 0x0B0C0D0E0F080706));
-        assert_eq!(parse_name(&buf[1..18]), (0x0504030201443322, 0x0B0C0D0E0F080706));
-    }
-    {
-        assert_eq!(parse_name(&buf[2..6]), (0x02014433, 0));
-        assert_eq!(parse_name(&buf[2..7]), (0x0302014433, 0));
-        assert_eq!(parse_name(&buf[2..8]), (0x040302014433, 0));
-        assert_eq!(parse_name(&buf[2..9]), (0x05040302014433, 0));
-        assert_eq!(parse_name(&buf[2..10]), (0x0605040302014433, 0));
-        assert_eq!(parse_name(&buf[2..11]), (0x0605040302014433, 0x07));
-        assert_eq!(parse_name(&buf[2..12]), (0x0605040302014433, 0x0807));
-        assert_eq!(parse_name(&buf[2..13]), (0x0605040302014433, 0x0F0807));
-        assert_eq!(parse_name(&buf[2..14]), (0x0605040302014433, 0x0E0F0807));
-        assert_eq!(parse_name(&buf[2..15]), (0x0605040302014433, 0x0D0E0F0807));
-        assert_eq!(parse_name(&buf[2..16]), (0x0605040302014433, 0x0C0D0E0F0807));
-        assert_eq!(parse_name(&buf[2..17]), (0x0605040302014433, 0x0B0C0D0E0F0807));
-        assert_eq!(parse_name(&buf[2..18]), (0x0605040302014433, 0x0A0B0C0D0E0F0807));
-        assert_eq!(parse_name(&buf[2..19]), (0x0605040302014433, 0x0A0B0C0D0E0F0807));
-    }
-    {
-        assert_eq!(parse_name(&buf[3..7]), (0x03020144, 0));
-        assert_eq!(parse_name(&buf[3..8]), (0x0403020144, 0));
-        assert_eq!(parse_name(&buf[3..9]), (0x050403020144, 0));
-        assert_eq!(parse_name(&buf[3..10]), (0x06050403020144, 0));
-        assert_eq!(parse_name(&buf[3..11]), (0x0706050403020144, 0));
-        assert_eq!(parse_name(&buf[3..12]), (0x0706050403020144, 0x08));
-        assert_eq!(parse_name(&buf[3..13]), (0x0706050403020144, 0x0F08));
-        assert_eq!(parse_name(&buf[3..14]), (0x0706050403020144, 0x0E0F08));
-        assert_eq!(parse_name(&buf[3..15]), (0x0706050403020144, 0x0D0E0F08));
-        assert_eq!(parse_name(&buf[3..16]), (0x0706050403020144, 0x0C0D0E0F08));
-        assert_eq!(parse_name(&buf[3..17]), (0x0706050403020144, 0x0B0C0D0E0F08));
-        assert_eq!(parse_name(&buf[3..18]), (0x0706050403020144, 0x0A0B0C0D0E0F08));
-        assert_eq!(parse_name(&buf[3..19]), (0x0706050403020144, 0x090A0B0C0D0E0F08));
-        assert_eq!(parse_name(&buf[3..20]), (0x0706050403020144, 0x090A0B0C0D0E0F08));
-    }
-
 }
 
 #[test]

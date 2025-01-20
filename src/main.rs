@@ -1,13 +1,12 @@
 #![feature(core_intrinsics)]
 #![feature(portable_simd)]
-#![feature(hasher_prefixfree_extras)]
 #![feature(string_remove_matches)]
 #![feature(unbounded_shifts)]
-#![feature(unchecked_shifts)]
+// #![feature(unchecked_shifts)]
 #![feature(ptr_sub_ptr)]
 
-use std::collections::HashMap;
 use clap::Parser;
+use std::collections::HashMap;
 
 mod ver1;
 mod ver2;
