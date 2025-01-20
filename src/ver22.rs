@@ -180,15 +180,15 @@ impl FileReader {
         // println!("total lines: {}", total_lines);
     }
 
+    // all process_single 5.75s
+
     fn process_single(&self, aggregator: &mut AggrHashTable, cursor: usize, last_delimiter1_pos: u64, line_start: &mut usize, inner_pos1: &mut u64, inner_pos2: &mut u64) {
+        let l1_preload_key: u64x2 = Self::preload_key_u64x2(self.buffer(*line_start));
         let l1_pos1 = if last_delimiter1_pos != 0 { cursor - 64 + last_delimiter1_pos.trailing_zeros() as usize } else { cursor + Self::get_and_clear(inner_pos1) };
         let l1_pos2 = cursor + Self::get_and_clear(inner_pos2);
 
-        let l1_preload_key: u64x2 = Self::preload_key_u64x2(self.buffer(*line_start));
-        let val1 = {
-            let l1_preload_val = Self::preload_val_u8x8(self.buffer(l1_pos2 - 8));
-            parse_value_u8x8(l1_preload_val)
-        };
+        let l1_preload_val = Self::preload_val_u8x8(self.buffer(l1_pos2 - 8));
+        let val1 = parse_value_u8x8(l1_preload_val);
 
         let key1_hash = truncate_key_simd(l1_preload_key, l1_pos1 - *line_start);
 

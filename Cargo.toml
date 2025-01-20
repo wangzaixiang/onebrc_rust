@@ -18,7 +18,8 @@ rand = "0.9.0-beta.3"
 log = "0.4.25"
 
 [profile.release]
-rustflags = ["-C", "target-cpu=native"]
+rustflags = ["-C", "target-cpu=native", "-C", "llvm-args=--optimize-regalloc --regalloc=greedy", ]
+#rustflags = ["-C", "target-cpu=native", "-C", "llvm-args=--enable-split-loopiv-heuristic", "-C", "llvm-args=-regalloc=fast"]
 debug = true
 
 
