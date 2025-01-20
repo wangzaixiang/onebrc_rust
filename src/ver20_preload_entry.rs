@@ -210,6 +210,11 @@ impl FileReader {
         unsafe { u8x8::from_slice( from_raw_parts(ptr, 8) ) }
     }
 
+    #[inline]
+    unsafe fn entry_ptr(base: *const HashEntry, offset: usize) -> *const u64 {
+        & (* base.add(offset)).key_hash as *const (u64, u64) as *const u64
+    }
+
     #[inline(never)]
     fn scan_loop(&self, aggregator: &mut AggrInfo) {
         let mut cursor: usize = 0;                  // force register, it may add a -x offset
@@ -271,13 +276,26 @@ impl FileReader {
 
                         parse_numbers_batch4(l1_preload_val, l2_preload_val, l3_preload_val, l4_preload_val)
                     };
-                    //
-                    let (l1_long_hash, l2_long_hash, l3_long_hash, l4_long_hash) = (
-                        truncate_key_simd(l1_preload_key, l1_pos1 - line_start),
-                        truncate_key_simd(l2_preload_key, l2_pos1 - l1_pos2 - 1),
-                        truncate_key_simd(l3_preload_key, l3_pos1 - l2_pos2 - 1),
-                        truncate_key_simd(l4_preload_key, l4_pos1 - l3_pos2 - 1)
-                        );
+
+                    let l1_long_hash =    truncate_key_simd(l1_preload_key, l1_pos1 - line_start);
+                    let l2_long_hash =    truncate_key_simd(l2_preload_key, l2_pos1 - l1_pos2 - 1);
+                    let l3_long_hash =    truncate_key_simd(l3_preload_key, l3_pos1 - l2_pos2 - 1);
+                    let l4_long_hash =    truncate_key_simd(l4_preload_key, l4_pos1 - l3_pos2 - 1);
+
+                    // preload has no effect
+                    // let p = aggregator.linar_hash_table.as_ptr();
+                    // unsafe {
+                    //     asm! {
+                    //         "prfm pldl1keep, [{x1}]",
+                    //         "prfm pldl1keep, [{x2}]",
+                    //         "prfm pldl1keep, [{x3}]",
+                    //         "prfm pldl1keep, [{x4}]",
+                    //         x1 = in(reg) Self::entry_ptr(p, AggrInfo::compute_hash_code(l1_long_hash) ),
+                    //         x2 = in(reg) Self::entry_ptr(p, AggrInfo::compute_hash_code(l2_long_hash) ),
+                    //         x3 = in(reg) Self::entry_ptr(p, AggrInfo::compute_hash_code(l3_long_hash) ),
+                    //         x4 = in(reg) Self::entry_ptr(p, AggrInfo::compute_hash_code(l4_long_hash) ),
+                    //     }
+                    // }
 
                     aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(line_start), l1_pos1 - line_start) }, l1_long_hash, val1);
                     aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(l1_pos2 + 1), l2_pos1 - l1_pos2 - 1) }, l2_long_hash, val2);
@@ -355,7 +373,7 @@ fn truncate_key_normal(key: u64x2, len: usize) -> u64x2 {
 }
 
 #[inline]
-fn truncate_key_simd(key: u64x2, len: usize) -> u64x2 {
+fn truncate_key_simd(key: u64x2, len: usize) -> (u64,u64) {
     let key: u8x16 = unsafe { transmute(key) };
     let index = u8x16::from_array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
     let mask = index.simd_lt(u8x16::splat(len as u8));
@@ -366,7 +384,7 @@ fn truncate_key_simd(key: u64x2, len: usize) -> u64x2 {
 #[derive(Clone)]
 #[repr(C, align(64))]
 struct HashEntry {
-    key_hash:  u64x2,     // 0
+    key_hash:  (u64, u64),     // 0
     data:      Aggregation,
     // min:    i32,     // 16  most write from min to sum
     // max:    i32,     // 20
@@ -408,7 +426,7 @@ impl AggrInfo {
 
     fn new_item() -> HashEntry {
         HashEntry {
-            key_hash: u64x2::splat(0),
+            key_hash: (0, 0),
             key: Vec::new(),
             data: Aggregation::new()
         }
@@ -424,22 +442,11 @@ impl AggrInfo {
 
 
     #[inline]
-    fn save_item_u64x2(&mut self, key: &[u8], hash: u64x2, value: i16) {
-        let (l, h) = (hash[0], hash[1]);
-        let hash_code = {
-            let p0 = l;
-            let p3 = h;
-            let p1 = l >> 20;
-            let p4 = h >> 20;
-            let p2 = l >> 40;
-            let p5 = h >> 40;
-            (p0 ^ p1) ^ (p2 ^ p3) ^ (p4 ^ p5)
-        };
-
-        let hash_code: usize = (hash_code % (1024*1024)) as usize;
+    fn save_item_u64x2(&mut self, key: &[u8], long_hash: (u64, u64), value: i16) {
+        let hash_code: usize = Self::compute_hash_code(long_hash) as usize;
 
         let item = unsafe { self.linar_hash_table.get_unchecked_mut(hash_code) };
-        if likely(item.key_hash == hash ) {
+        if likely( item.key_hash == long_hash) {  // // change from u64x2 makes 100ms fast, but still requires preload data
             debug_assert_eq!(item.key, key);
             let mut item_values = item.data;
             item_values.count += 1;
@@ -450,33 +457,25 @@ impl AggrInfo {
             return;
         }
         else if likely(item.key.is_empty()) {
-            item.key_hash = hash;
+            item.key_hash = long_hash;
             item.key = key.to_vec();
             item.data = Aggregation { sum: value as i32,  count:1, min: value as i32, max: value as i32 };
             return;
         }
         else {
-            self.slow_save(key, hash, value, hash_code);
+            self.slow_save(key, long_hash, value, hash_code);
         }
     }
 
-    fn compute_hash_code(hash: u64x2) -> u32 {
-        let (l, h) = (hash[0], hash[1]);
-        let hash_code = {
-            let p0 = l;
-            let p3 = h;
-            let p1 = l >> 20;
-            let p4 = h >> 20;
-            let p2 = l >> 40;
-            let p5 = h >> 40;
-            (p0 ^ p1) ^ (p2 ^ p3) ^ (p4 ^ p5)
-        };
-        (hash_code % (1024*1024)) as u32
+    fn compute_hash_code(long_hash: (u64, u64)) -> usize {
+        let x1 = long_hash.0 ^ long_hash.1;
+        let x2 = (x1 ^ (x1 >> 20) ^ (x1 >> 40)) as u32;
+        (x2 % (1 << 20)) as usize
     }
 
     #[inline]
-    fn batch_save_item(&mut self, key1: &[u8], hash1: u64x2, value1: i16, key2: &[u8], hash2: u64x2, value2: i16,
-                       key3: &[u8], hash3: u64x2, value3: i16, key4: &[u8], hash4: u64x2, value4: i16) {
+    fn batch_save_item(&mut self, key1: &[u8], hash1: (u64, u64), value1: i16, key2: &[u8], hash2: (u64, u64), value2: i16,
+                       key3: &[u8], hash3: (u64, u64), value3: i16, key4: &[u8], hash4: (u64, u64), value4: i16) {
         let hash_code_1 = (Self::compute_hash_code(hash1) % (1024*1024)) as usize;
         let hash_code_2 = (Self::compute_hash_code(hash2) % (1024*1024)) as usize;
         let hash_code_3 = (Self::compute_hash_code(hash3) % (1024*1024)) as usize;
@@ -538,7 +537,7 @@ impl AggrInfo {
 
 
     #[inline(never)]
-    fn slow_save(&mut self, key: &[u8], key_hash: u64x2, value: i16, from: usize) {
+    fn slow_save(&mut self, key: &[u8], key_hash: (u64, u64), value: i16, from: usize) {
         for i in from..from + 1024 {    // search at most 1024 entry
             let item: &mut HashEntry = &mut self.linar_hash_table[i];
             if unlikely(item.key_hash == key_hash) {
@@ -590,22 +589,24 @@ pub fn ver20_preload_entry() -> Result<HashMap<String,(f32, f32, f32)>, Box<dyn 
 
 fn check_result(aggr: &AggrInfo) {
     let mut count = 0;
+    let mut dupicated = 0;
     for i in 0.. aggr.linar_hash_table.len() {
         let item = & aggr.linar_hash_table[i];
         if !item.key.is_empty() {
             count += 1;
             let is_dupicated = if i> 0 {
-                item.key_hash == aggr.linar_hash_table[i-1].key_hash
+                aggr.linar_hash_table[i-1].key_hash.0 != 0
             }
             else {
                 false
             };
             let key = unsafe { std::str::from_utf8_unchecked( item.key.as_slice() ) };
             if is_dupicated {
+                dupicated += 1;
                 println!("{};\t{}\t{}", key, i, is_dupicated);
             }
         }
     }
     assert_eq!(count, 413);
-    println!("total entries: {}", count);
+    println!("total entries: {}, duplicated: {}", count, dupicated);
 }
