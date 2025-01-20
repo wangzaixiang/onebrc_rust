@@ -185,7 +185,6 @@ impl FileReader {
     fn get_and_clear(pos: &mut u64) -> usize {
         let at = pos.trailing_zeros();
         *pos &= !1 << at;
-        // *pos &= unsafe { (!1u64).unbounded_shl(at) };       // unbounded_shl 对应好几条指令，不是最佳方案
         at as usize
     }
 
@@ -210,21 +209,13 @@ impl FileReader {
         unsafe { u8x8::from_slice( from_raw_parts(ptr, 8) ) }
     }
 
-    #[inline]
-    unsafe fn entry_ptr(base: *const HashEntry, offset: usize) -> *const u64 {
-        & (* base.add(offset)).key_hash as *const (u64, u64) as *const u64
-    }
-
     #[inline(never)]
-    fn scan_loop(&self, aggregator: &mut AggrInfo) {
+    fn scan_loop(&self, aggregator: &mut AggrHashTable) {
         let mut cursor: usize = 0;                  // force register, it may add a -x offset
         let mut last_delimiter1_pos = 0u64;       // force register
         let mut outer_pos1 = 0u64;            // force register
         let mut outer_pos2 = 0u64;            // force register
         let mut line_start = 0usize;    // the next line's start position
-
-        let debug = Debug::new();
-        // let mut total_lines = 0;
 
         let block : u8x64 = u8x64::from_slice(unsafe { from_raw_parts(self.buffer(0), 64) });
         outer_pos1 = block.simd_eq(u8x64::splat(b';')).to_bitmask() as u64;
@@ -238,99 +229,24 @@ impl FileReader {
 
                 let mut lines = inner_pos2.count_ones();
 
-                // TODO the following code is not optimized in rustc, it saved block into stack and then load it again,
-                // it shpuld be optimized by using register only
                 let block = u8x64::from_slice(unsafe { from_raw_parts(self.buffer(cursor + 64), 64) });
                 outer_pos1 = block.simd_eq(u8x64::splat(b';')).to_bitmask() as u64;
                 outer_pos2 = block.simd_eq(u8x64::splat(b'\n')).to_bitmask() as u64;
 
                 while likely(lines >= 4) {  // 4..=8
-                    // l1: (line_start, l1_pos1, l1_pos2)
-                    let l1_pos1 = if last_delimiter1_pos != 0 { cursor - 64 + Self::get_and_clear(&mut last_delimiter1_pos) } else { cursor + Self::get_and_clear(&mut inner_pos1) };
-                    let l1_pos2 = cursor + Self::get_and_clear(&mut inner_pos2);
-
-                    // l2: (l1_pos2+1, l2_pos1, l2_pos2)
-                    let l2_pos1 = cursor + Self::get_and_clear(&mut inner_pos1);
-                    let l2_pos2 = cursor + Self::get_and_clear(&mut inner_pos2);
-                    debug_assert!(l1_pos2 > l1_pos1);
-                    debug_assert!(l1_pos2 < l2_pos1);
-
-                    // l3: (l2_pos2+1, l3_pos1, l3_pos2)
-                    let l3_pos1 = cursor + Self::get_and_clear(&mut inner_pos1);
-                    let l3_pos2 = cursor + Self::get_and_clear(&mut inner_pos2);
-
-                    let l4_pos1 = cursor + Self::get_and_clear(&mut inner_pos1);
-                    let l4_pos2 = cursor + Self::get_and_clear(&mut inner_pos2);
-
-                    // preload memory
-                    let l1_preload_key: u64x2 = Self::preload_key_u64x2(self.buffer(line_start));
-                    let l2_preload_key: u64x2 = Self::preload_key_u64x2(self.buffer(l1_pos2+1));
-                    let l3_preload_key: u64x2 = Self::preload_key_u64x2(self.buffer(l2_pos2+1));
-                    let l4_preload_key: u64x2 = Self::preload_key_u64x2(self.buffer(l3_pos2+1));
-
-                    let (val1, val2, val3, val4) = {
-                        let l1_preload_val = Self::preload_val_u8x8(self.buffer(l1_pos2-8)) ;
-                        let l2_preload_val = Self::preload_val_u8x8(self.buffer(l2_pos2-8)) ;
-                        let l3_preload_val = Self::preload_val_u8x8(self.buffer(l3_pos2-8)) ;
-                        let l4_preload_val = Self::preload_val_u8x8(self.buffer(l4_pos2-8)) ;
-
-                        parse_numbers_batch4(l1_preload_val, l2_preload_val, l3_preload_val, l4_preload_val)
-                    };
-
-                    let l1_long_hash =    truncate_key_simd(l1_preload_key, l1_pos1 - line_start);
-                    let l2_long_hash =    truncate_key_simd(l2_preload_key, l2_pos1 - l1_pos2 - 1);
-                    let l3_long_hash =    truncate_key_simd(l3_preload_key, l3_pos1 - l2_pos2 - 1);
-                    let l4_long_hash =    truncate_key_simd(l4_preload_key, l4_pos1 - l3_pos2 - 1);
-
-                    // preload has no effect
-                    // let p = aggregator.linar_hash_table.as_ptr();
-                    // unsafe {
-                    //     asm! {
-                    //         "prfm pldl1keep, [{x1}]",
-                    //         "prfm pldl1keep, [{x2}]",
-                    //         "prfm pldl1keep, [{x3}]",
-                    //         "prfm pldl1keep, [{x4}]",
-                    //         x1 = in(reg) Self::entry_ptr(p, AggrInfo::compute_hash_code(l1_long_hash) ),
-                    //         x2 = in(reg) Self::entry_ptr(p, AggrInfo::compute_hash_code(l2_long_hash) ),
-                    //         x3 = in(reg) Self::entry_ptr(p, AggrInfo::compute_hash_code(l3_long_hash) ),
-                    //         x4 = in(reg) Self::entry_ptr(p, AggrInfo::compute_hash_code(l4_long_hash) ),
-                    //     }
-                    // }
-
-                    aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(line_start), l1_pos1 - line_start) }, l1_long_hash, val1);
-                    aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(l1_pos2 + 1), l2_pos1 - l1_pos2 - 1) }, l2_long_hash, val2);
-                    aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(l2_pos2 + 1), l3_pos1 - l2_pos2 - 1) }, l3_long_hash, val3);
-                    aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(l3_pos2 + 1), l4_pos1 - l3_pos2 - 1) }, l4_long_hash, val4);
-
+                    self.process_batch_4(aggregator, cursor, last_delimiter1_pos, &mut line_start, &mut inner_pos1, &mut inner_pos2);
+                    last_delimiter1_pos = 0;
                     lines -= 4;
-                    line_start = l4_pos2 + 1;
                 }
 
 
                 while likely(lines > 0) {
-                    let l1_pos1 = if last_delimiter1_pos != 0 { cursor - 64 + Self::get_and_clear(&mut last_delimiter1_pos) } else { cursor + Self::get_and_clear(&mut inner_pos1) };
-                    let l1_pos2 = cursor + Self::get_and_clear(&mut inner_pos2);
-
-                    let l1_preload_key: u64x2 = Self::preload_key_u64x2(self.buffer(line_start));
-                    let val1 = {
-                        let l1_preload_val =  Self::preload_val_u8x8(self.buffer(l1_pos2-8));
-                        parse_value_u8x8(l1_preload_val)
-                    };
-
-                    let key1_hash = truncate_key_simd(l1_preload_key, l1_pos1 - line_start);
-
-                    aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(line_start), l1_pos1 - line_start) }, key1_hash, val1);
-
+                    self.process_single(aggregator, cursor, last_delimiter1_pos, &mut line_start, &mut inner_pos1, &mut inner_pos2);
+                    last_delimiter1_pos = 0;
                     lines -= 1;
-                    line_start = l1_pos2 + 1;
                 }
 
-                if last_delimiter1_pos == 0 {
-                    last_delimiter1_pos = inner_pos1;
-                }
-                else {
-                    // already save last_pos on the last loop
-                }
+                last_delimiter1_pos = inner_pos1;
                 cursor += 64;
             }
             else {
@@ -339,7 +255,68 @@ impl FileReader {
             }
         }
         // println!("total lines: {}", total_lines);
-        debug.print();
+    }
+
+    fn process_single(&self, aggregator: &mut AggrHashTable, cursor: usize, last_delimiter1_pos: u64, line_start: &mut usize, inner_pos1: &mut u64, inner_pos2: &mut u64) {
+        let l1_pos1 = if last_delimiter1_pos != 0 { cursor - 64 + last_delimiter1_pos.trailing_zeros() as usize } else { cursor + Self::get_and_clear(inner_pos1) };
+        let l1_pos2 = cursor + Self::get_and_clear(inner_pos2);
+
+        let l1_preload_key: u64x2 = Self::preload_key_u64x2(self.buffer(*line_start));
+        let val1 = {
+            let l1_preload_val = Self::preload_val_u8x8(self.buffer(l1_pos2 - 8));
+            parse_value_u8x8(l1_preload_val)
+        };
+
+        let key1_hash = truncate_key_simd(l1_preload_key, l1_pos1 - *line_start);
+
+        aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(*line_start), l1_pos1 - *line_start) }, key1_hash, val1);
+
+        *line_start = l1_pos2 + 1;
+    }
+
+    fn process_batch_4(&self, aggregator: &mut AggrHashTable, cursor: usize, last_delimiter1_pos: u64, line_start: &mut usize, inner_pos1: &mut u64, inner_pos2: &mut u64) {
+        let l1_pos1 = if last_delimiter1_pos != 0 { cursor - 64 + last_delimiter1_pos.trailing_zeros() as usize } else { cursor + Self::get_and_clear(inner_pos1) };
+        let l1_pos2 = cursor + Self::get_and_clear(inner_pos2);
+
+        // l2: (l1_pos2+1, l2_pos1, l2_pos2)
+        let l2_pos1 = cursor + Self::get_and_clear(inner_pos1);
+        let l2_pos2 = cursor + Self::get_and_clear(inner_pos2);
+        debug_assert!(l1_pos2 > l1_pos1);
+        debug_assert!(l1_pos2 < l2_pos1);
+
+        // l3: (l2_pos2+1, l3_pos1, l3_pos2)
+        let l3_pos1 = cursor + Self::get_and_clear(inner_pos1);
+        let l3_pos2 = cursor + Self::get_and_clear(inner_pos2);
+
+        let l4_pos1 = cursor + Self::get_and_clear(inner_pos1);
+        let l4_pos2 = cursor + Self::get_and_clear(inner_pos2);
+
+        // preload memory
+        let l1_preload_key: u64x2 = Self::preload_key_u64x2(self.buffer(*line_start));
+        let l2_preload_key: u64x2 = Self::preload_key_u64x2(self.buffer(l1_pos2 + 1));
+        let l3_preload_key: u64x2 = Self::preload_key_u64x2(self.buffer(l2_pos2 + 1));
+        let l4_preload_key: u64x2 = Self::preload_key_u64x2(self.buffer(l3_pos2 + 1));
+
+        let (val1, val2, val3, val4) = {
+            let l1_preload_val = Self::preload_val_u8x8(self.buffer(l1_pos2 - 8));
+            let l2_preload_val = Self::preload_val_u8x8(self.buffer(l2_pos2 - 8));
+            let l3_preload_val = Self::preload_val_u8x8(self.buffer(l3_pos2 - 8));
+            let l4_preload_val = Self::preload_val_u8x8(self.buffer(l4_pos2 - 8));
+
+            parse_numbers_batch4(l1_preload_val, l2_preload_val, l3_preload_val, l4_preload_val)
+        };
+
+        let l1_long_hash = truncate_key_simd(l1_preload_key, l1_pos1 - *line_start);
+        let l2_long_hash = truncate_key_simd(l2_preload_key, l2_pos1 - l1_pos2 - 1);
+        let l3_long_hash = truncate_key_simd(l3_preload_key, l3_pos1 - l2_pos2 - 1);
+        let l4_long_hash = truncate_key_simd(l4_preload_key, l4_pos1 - l3_pos2 - 1);
+
+        aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(*line_start), l1_pos1 - *line_start) }, l1_long_hash, val1);
+        aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(l1_pos2 + 1), l2_pos1 - l1_pos2 - 1) }, l2_long_hash, val2);
+        aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(l2_pos2 + 1), l3_pos1 - l2_pos2 - 1) }, l3_long_hash, val3);
+        aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(l3_pos2 + 1), l4_pos1 - l3_pos2 - 1) }, l4_long_hash, val4);
+
+        *line_start = l4_pos2 + 1;
     }
 
 }
@@ -357,22 +334,6 @@ const MASKS: [u64;9] = [
 ];
 
 #[inline]
-fn truncate_key_normal(key: u64x2, len: usize) -> u64x2 {
-    let len_l = len.min(8);     // 1..=8
-    let len_h = (len - len_l).min(8);   // 0..=8
-    let key_l = key[0] & MASKS[len_l];
-    let key_h = key[1] & MASKS[len_h];
-    // let key_l = key[0] & (u64::MAX >> (64 - 8 * len_l));
-    // let key_h = key[1] & (u64::MAX >> (64 - 8 * len_h));
-
-    // let key_l = key[0] & (u64::MAX >> (64 - 8 * len_l));
-    // let key_h = key[1] & (if len_h == 0 { 0 } else { u64::MAX >> (64 - 8 * len_h) });
-
-    u64x2::from_array([key_l, key_h])
-
-}
-
-#[inline]
 fn truncate_key_simd(key: u64x2, len: usize) -> (u64,u64) {
     let key: u8x16 = unsafe { transmute(key) };
     let index = u8x16::from_array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
@@ -386,10 +347,6 @@ fn truncate_key_simd(key: u64x2, len: usize) -> (u64,u64) {
 struct HashEntry {
     key_hash:  (u64, u64),     // 0
     data:      Aggregation,
-    // min:    i32,     // 16  most write from min to sum
-    // max:    i32,     // 20
-    // count:  u32,     // 24
-    // sum:    i32,     // 28
     key: Vec<u8>,    // 32
 }
 
@@ -401,11 +358,6 @@ struct Aggregation {
     sum: i32,
 }
 
-// #[derive(Clone, Copy)]
-// union AggrItemValues {
-//     raw: [u8; 16],
-//     expanded: (i32, i32, u32, i32), // min, max, count, sum
-// }
 
 impl Aggregation {
     fn new() -> Aggregation {
@@ -418,11 +370,11 @@ impl Aggregation {
     }
 }
 
-struct AggrInfo {
-    linar_hash_table: Vec<HashEntry>
+struct AggrHashTable {
+    linear_hash_table: Vec<HashEntry>
 }
 
-impl AggrInfo {
+impl AggrHashTable {
 
     fn new_item() -> HashEntry {
         HashEntry {
@@ -432,11 +384,11 @@ impl AggrInfo {
         }
     }
 
-    fn new() -> AggrInfo {
+    fn new() -> AggrHashTable {
         let hashes = vec![Self::new_item(); 1024*1024 + 1024];
 
-        AggrInfo {
-            linar_hash_table: hashes
+        AggrHashTable {
+            linear_hash_table: hashes
         }
     }
 
@@ -445,7 +397,7 @@ impl AggrInfo {
     fn save_item_u64x2(&mut self, key: &[u8], long_hash: (u64, u64), value: i16) {
         let hash_code: usize = Self::compute_hash_code(long_hash) as usize;
 
-        let item = unsafe { self.linar_hash_table.get_unchecked_mut(hash_code) };
+        let item = unsafe { self.linear_hash_table.get_unchecked_mut(hash_code) };
         if likely( item.key_hash == long_hash) {  // // change from u64x2 makes 100ms fast, but still requires preload data
             debug_assert_eq!(item.key, key);
             let mut item_values = item.data;
@@ -473,73 +425,10 @@ impl AggrInfo {
         (x2 % (1 << 20)) as usize
     }
 
-    #[inline]
-    fn batch_save_item(&mut self, key1: &[u8], hash1: (u64, u64), value1: i16, key2: &[u8], hash2: (u64, u64), value2: i16,
-                       key3: &[u8], hash3: (u64, u64), value3: i16, key4: &[u8], hash4: (u64, u64), value4: i16) {
-        let hash_code_1 = (Self::compute_hash_code(hash1) % (1024*1024)) as usize;
-        let hash_code_2 = (Self::compute_hash_code(hash2) % (1024*1024)) as usize;
-        let hash_code_3 = (Self::compute_hash_code(hash3) % (1024*1024)) as usize;
-        let hash_code_4 = (Self::compute_hash_code(hash4) % (1024*1024)) as usize;
-
-        let linar_hash_table = &mut self.linar_hash_table;
-        let item1 = unsafe { &mut *(linar_hash_table.get_unchecked_mut(hash_code_1) as *mut HashEntry) };
-        let item2 = unsafe { &mut * (linar_hash_table.get_unchecked_mut(hash_code_2) as *mut HashEntry) };
-        let item3 = unsafe { &mut * (linar_hash_table.get_unchecked_mut(hash_code_3) as *mut HashEntry) };
-        let item4 = unsafe { &mut * (linar_hash_table.get_unchecked_mut(hash_code_4) as *mut HashEntry) };
-
-        // preload data
-        let all_matched = {
-            let key_hash1 = item1.key_hash;
-            let key_hash2 = item2.key_hash;
-            let key_hash3 = item3.key_hash;
-            let key_hash4 = item4.key_hash;
-            key_hash1 == hash1 && key_hash2 == hash2 && key_hash3 == hash3 && key_hash4 == hash4
-        };
-
-        if likely( all_matched ) {
-            let mut key_data_1 = item1.data;
-            let mut key_data_2 = item2.data;
-            let mut key_data_3 = item3.data;
-            let mut key_data_4 = item4.data;
-
-            key_data_1.count += 1;
-            key_data_1.sum += value1 as i32;
-            key_data_1.min = key_data_1.min.min(value1 as i32);
-            key_data_1.max = key_data_1.max.max(value1 as i32);
-            item1.data = key_data_1;
-
-            key_data_2.count += 1;
-            key_data_2.sum += value2 as i32;
-            key_data_2.min = key_data_2.min.min(value2 as i32);
-            key_data_2.max = key_data_2.max.max(value2 as i32);
-            item2.data =  key_data_2 ;   // 1 store access
-
-            key_data_3.count += 1;
-            key_data_3.sum += value3 as i32;
-            key_data_3.min = key_data_3.min.min(value3 as i32);
-            key_data_3.max = key_data_3.max.max(value3 as i32);
-            item3.data = key_data_3;   // 1 store access
-
-            key_data_4.count += 1;
-            key_data_4.sum += value4 as i32;
-            key_data_4.min = key_data_4.min.min(value4 as i32);
-            key_data_4.max = key_data_4.max.max(value4 as i32);
-            item4.data = key_data_4;   // 1 store access
-            return;
-        }
-        else {
-            self.save_item_u64x2(key1, hash1, value1);
-            self.save_item_u64x2(key2, hash2, value2);
-            self.save_item_u64x2(key3, hash3, value3);
-            self.save_item_u64x2(key4, hash4, value4);
-        }
-    }
-
-
     #[inline(never)]
     fn slow_save(&mut self, key: &[u8], key_hash: (u64, u64), value: i16, from: usize) {
         for i in from..from + 1024 {    // search at most 1024 entry
-            let item: &mut HashEntry = &mut self.linar_hash_table[i];
+            let item: &mut HashEntry = &mut self.linear_hash_table[i];
             if unlikely(item.key_hash == key_hash) {
                 debug_assert_eq!(item.key, key);
                 let mut item_values = item.data;
@@ -563,7 +452,7 @@ impl AggrInfo {
 
 #[inline(never)]
 // based on ver12
-pub fn ver20_preload_entry() -> Result<HashMap<String,(f32, f32, f32)>, Box<dyn std::error::Error>> {     // 8.96s
+pub fn ver22() -> Result<HashMap<String,(f32, f32, f32)>, Box<dyn std::error::Error>> {     // 8.96s
 
     let file = std::fs::File::open(MEASUREMENT_FILE)?;
 
@@ -575,27 +464,22 @@ pub fn ver20_preload_entry() -> Result<HashMap<String,(f32, f32, f32)>, Box<dyn 
 
     let reader = FileReader::new(mmap);
 
-    // let (pos1, pos2, pos1_count, pos2_count) = unsafe { reader.load_current_128(0) };
-
-    // println!("pos1: {:x}, pos2: {:x}, pos1_count: {}, pos2_count: {}", pos1, pos2, pos1_count, pos2_count);
-    let mut aggr = AggrInfo::new();
+    let mut aggr = AggrHashTable::new();
     reader.scan_loop(&mut aggr);
 
     check_result(&aggr);
-    // check_result(&aggr);
-
     Ok( HashMap::new() )
 }
 
-fn check_result(aggr: &AggrInfo) {
+fn check_result(aggr: &AggrHashTable) {
     let mut count = 0;
     let mut dupicated = 0;
-    for i in 0.. aggr.linar_hash_table.len() {
-        let item = & aggr.linar_hash_table[i];
+    for i in 0.. aggr.linear_hash_table.len() {
+        let item = & aggr.linear_hash_table[i];
         if !item.key.is_empty() {
             count += 1;
             let is_dupicated = if i> 0 {
-                aggr.linar_hash_table[i-1].key_hash.0 != 0
+                aggr.linear_hash_table[i-1].key_hash.0 != 0
             }
             else {
                 false
