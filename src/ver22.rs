@@ -250,6 +250,23 @@ fn truncate_key_simd(key: u64x2, len: usize) -> (u64,u64) {
     let mask = index.simd_lt(u8x16::splat(len as u8));
     let key = mask.select(key, u8x16::splat(0));
     unsafe { transmute(key) }
+
+    // the following code is slower ~700ms than the above code
+    // let len1 = if len > 8 { 8 } else { len };
+    // let len2 = len - len1;
+    // let len2 = if len2 > 8 { 8 } else { len2 };
+    //
+    // let low = key[0] & ( u64::MAX >> (64 - len1*8) );
+    // let high = key[1];
+    // let high = if len2 == 0 { 0 } else { high & ( u64::MAX >> (64 - len2*8) ) };
+    // (low, high)
+
+    // let len1 = if len <= 8 { len } else { 8 };
+    // let len2 = if len >= 16 { 8 } else if len > 8 { len - 8 } else { 0 };
+    //
+    // let low = if len1 == 0 { 0 } else { key[0] & (0xFF_FF_FF_FF_FF_FF_FF_FF >> (64 - len1 * 8)) };
+    // let high= if len2 == 0 { 0 } else { key[1] & (0xFF_FF_FF_FF_FF_FF_FF_FF >> (64 - len2 * 8)) };
+    // (low, high)
 }
 
 #[derive(Clone)]
