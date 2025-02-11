@@ -1,3 +1,4 @@
+use std::arch::asm;
 use crate::MEASUREMENT_FILE;
 use std::collections::HashMap;
 use std::intrinsics::{likely, unlikely};
@@ -147,30 +148,33 @@ impl FileReader {
         while likely(cursor < self.length() ) {
             if likely( (cursor + 64) <= self.length() ) {
 
-                let mut inner_pos1 = outer_pos1;
-                let mut inner_pos2 = outer_pos2;
+                let mut lines = outer_pos2.count_ones();
 
-                let mut lines = inner_pos2.count_ones();
-
+                // unsafe {     // no effect
+                //     asm! {
+                //         "prfm pldl1keep, [{0}]", in(reg) self.buffer(cursor + 64)
+                //     }
+                // }
                 let block = u8x64::from_slice(unsafe { from_raw_parts(self.buffer(cursor + 64), 64) });
-                outer_pos1 = block.simd_eq(u8x64::splat(b';')).to_bitmask() as u64;
-                outer_pos2 = block.simd_eq(u8x64::splat(b'\n')).to_bitmask() as u64;
 
                 while likely(lines >= 4) {  // 4..=8
-                    self.process_batch_4(aggregator, cursor, last_delimiter1_pos, &mut line_start, &mut inner_pos1, &mut inner_pos2);
+                    self.process_batch_4(aggregator, cursor, last_delimiter1_pos, &mut line_start, &mut outer_pos1, &mut outer_pos2);
                     last_delimiter1_pos = 0;
                     lines -= 4;
                 }
 
-
                 while likely(lines > 0) {
-                    self.process_single(aggregator, cursor, last_delimiter1_pos, &mut line_start, &mut inner_pos1, &mut inner_pos2);
+                    self.process_single(aggregator, cursor, last_delimiter1_pos, &mut line_start, &mut outer_pos1, &mut outer_pos2);
                     last_delimiter1_pos = 0;
                     lines -= 1;
                 }
 
-                last_delimiter1_pos = inner_pos1;
+                last_delimiter1_pos = outer_pos1;       // maybe !0
                 cursor += 64;
+
+                // let block = u8x64::from_slice(unsafe { from_raw_parts(self.buffer(cursor), 64) });
+                outer_pos1 = block.simd_eq(u8x64::splat(b';')).to_bitmask() as u64;
+                outer_pos2 = block.simd_eq(u8x64::splat(b'\n')).to_bitmask() as u64;
             }
             else {
                 println!("process last block");
@@ -190,9 +194,10 @@ impl FileReader {
         let l1_preload_val = Self::preload_val_u8x8(self.buffer(l1_pos2 - 8));
         let val1 = parse_value_u8x8(l1_preload_val);
 
-        let key1_hash = truncate_key_simd(l1_preload_key, l1_pos1 - *line_start);
+        let key1_long_hash = truncate_key_simd(l1_preload_key, l1_pos1 - *line_start);
+        let key1_hash_code = AggrHashTable::compute_hash_code(key1_long_hash);
 
-        aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(*line_start), l1_pos1 - *line_start) }, key1_hash, val1);
+        aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(*line_start), l1_pos1 - *line_start) }, key1_long_hash, key1_hash_code, val1);
 
         *line_start = l1_pos2 + 1;
     }
@@ -234,10 +239,21 @@ impl FileReader {
         let l3_long_hash = truncate_key_simd(l3_preload_key, l3_pos1 - l2_pos2 - 1);
         let l4_long_hash = truncate_key_simd(l4_preload_key, l4_pos1 - l3_pos2 - 1);
 
-        aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(*line_start), l1_pos1 - *line_start) }, l1_long_hash, val1);
-        aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(l1_pos2 + 1), l2_pos1 - l1_pos2 - 1) }, l2_long_hash, val2);
-        aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(l2_pos2 + 1), l3_pos1 - l2_pos2 - 1) }, l3_long_hash, val3);
-        aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(l3_pos2 + 1), l4_pos1 - l3_pos2 - 1) }, l4_long_hash, val4);
+        let l1_hash_code = AggrHashTable::compute_hash_code(l1_long_hash);
+        let l2_hash_code = AggrHashTable::compute_hash_code(l2_long_hash);
+        let l3_hash_code = AggrHashTable::compute_hash_code(l3_long_hash);
+        let l4_hash_code = AggrHashTable::compute_hash_code(l4_long_hash);
+
+        unsafe { aggregator.preload_hash_entry(l2_hash_code); }
+        aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(*line_start), l1_pos1 - *line_start) }, l1_long_hash, l1_hash_code, val1);
+
+        unsafe { aggregator.preload_hash_entry(l3_hash_code); }
+        aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(l1_pos2 + 1), l2_pos1 - l1_pos2 - 1) }, l2_long_hash, l2_hash_code, val2);
+
+        unsafe { aggregator.preload_hash_entry(l4_hash_code); }
+        aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(l2_pos2 + 1), l3_pos1 - l2_pos2 - 1) }, l3_long_hash, l3_hash_code, val3);
+
+        aggregator.save_item_u64x2(unsafe { from_raw_parts(self.buffer(l3_pos2 + 1), l4_pos1 - l3_pos2 - 1) }, l4_long_hash, l4_hash_code, val4);
 
         *line_start = l4_pos2 + 1;
     }
@@ -304,7 +320,7 @@ struct AggrHashTable {
 impl AggrHashTable {
 
     const HASH_SIZE: usize = 2 << Self::HASH_FACTOR;
-    const HASH_FACTOR: usize = 17;
+    const HASH_FACTOR: usize = 20;
     fn new_item() -> HashEntry {
         HashEntry {
             key_hash: (0, 0),
@@ -321,10 +337,18 @@ impl AggrHashTable {
         }
     }
 
+    #[inline]
+    unsafe fn preload_hash_entry(&self, index: usize) {
+        let item  = self.linear_hash_table.get_unchecked(index);
+        asm! {
+            "prfm pldl1strm, [{0}]", in(reg) item as *const HashEntry
+        }
+    }
+
 
     #[inline]
-    fn save_item_u64x2(&mut self, key: &[u8], long_hash: (u64, u64), value: i16) {
-        let hash_code: usize = Self::compute_hash_code(long_hash) as usize;
+    fn save_item_u64x2(&mut self, key: &[u8], long_hash: (u64, u64), hash_code: usize, value: i16) {
+        // let hash_code: usize = Self::compute_hash_code(long_hash) as usize;
 
         let item = unsafe { self.linear_hash_table.get_unchecked_mut(hash_code) };
         if likely( item.key_hash == long_hash) {  // // change from u64x2 makes 100ms fast, but still requires preload data
@@ -349,9 +373,8 @@ impl AggrHashTable {
     }
 
     fn compute_hash_code(long_hash: (u64, u64)) -> usize {
-        // 5.39s for 2^17
         let x1 = long_hash.0 ^ long_hash.1;
-        let x2 = (x1 ^ (x1 >> 20)^ (x1 >> 40)) as u32;
+        let x2 = (x1 ^ (x1 >> 20) ^ (x1 >> 40)) as u32;
         (x2 % (1 << Self::HASH_FACTOR)) as usize
     }
 
@@ -382,7 +405,7 @@ impl AggrHashTable {
 
 #[inline(never)]
 // based on ver12
-pub fn ver22() -> Result<HashMap<String,(f32, f32, f32)>, Box<dyn std::error::Error>> {     // 8.96s
+pub fn ver23() -> Result<HashMap<String,(f32, f32, f32)>, Box<dyn std::error::Error>> {     // 8.96s
 
     let file = std::fs::File::open(MEASUREMENT_FILE)?;
 
@@ -417,7 +440,7 @@ fn check_result(aggr: &AggrHashTable) {
             let key = unsafe { std::str::from_utf8_unchecked( item.key.as_slice() ) };
             if is_dupicated {
                 dupicated += 1;
-                println!("{};\t{}\t{} prev:{}", key, i, is_dupicated, unsafe {std::str::from_utf8_unchecked( aggr.linear_hash_table[i-1].key.as_slice() )});
+                println!("{};\t{}\t{}", key, i, is_dupicated);
             }
         }
     }

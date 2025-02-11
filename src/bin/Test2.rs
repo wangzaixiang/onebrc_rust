@@ -20,6 +20,7 @@ fn main() {
             "test3" => test3(),
             "test4" => test4(),
             "test5" => test5(),
+            "test5_2" => test5_2(),
             "test6" => test6(),
             "test7" => test7(),
             "test8" => test8(),
@@ -572,7 +573,7 @@ fn test6(){
  instructions: 252486626786
      branches: 6643814991
 branch-misses: 115
-IPC: 7.99
+IPC: 7.99       the highest IPC since M1 has only 8 decode-width
 */
 fn test5(){
     let array = [1u64, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
@@ -677,6 +678,145 @@ fn test5(){
         v7 =  inout(vreg) v7,
         v8 =  inout(vreg) v8,
         v9 =  inout(vreg) v9,
+        v10 =  inout(vreg) v10,
+        tmp = out(reg) _,
+        }
+        }
+
+    }
+
+    let time1 = time0.elapsed();
+    println!("test5 time: {:?}, iteration: {:.2}ns", time1, time1.as_nanos() as f64  / LOOP as f64);
+}
+
+
+fn test5_2(){
+    let array = [1u64, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+    let base0 = 1234i64;
+    let base1 = 1234i64;
+    let mut i1 = 10i64;
+    let mut i2 = 20i64;
+    let mut i3 = 30i64;
+    let mut i4 = 40i64;
+    let mut i5 = 50i64;
+    let mut i6 = 60i64;
+    let mut i7 = 70i64;
+    let mut i8 = 80i64;
+    let mut i9 = 90i64;
+    let mut i10 = 100i64;
+    let mut i11 = 110i64;
+    let mut i12 = 120i64;
+    let mut i13 = 130i64;
+    let mut i14 = 140i64;
+    let mut i15 = 150i64;
+    let mut i16 = 160i64;
+    let mut i17 = 170i64;
+    let mut i18 = 180i64;
+    let mut i19 = 190i64;
+    let mut i20 = 200i64;
+    let mut i21 = 210i64;
+    let mut i22 = 220i64;
+    let mut i23 = 230i64;
+    let mut i24 = 240i64;
+    let mut v1: i8x16 = i8x16::splat(1);
+    let mut v2: i8x16 = i8x16::splat(2);
+    let mut v3: i8x16 = i8x16::splat(3);
+    let mut v4: i8x16 = i8x16::splat(4);
+    let mut v5: i8x16 = i8x16::splat(5);
+    let mut v6: i8x16 = i8x16::splat(6);
+    let mut v7: i8x16 = i8x16::splat(7);
+    let mut v8: i8x16 = i8x16::splat(8);
+    let mut v9: i8x16 = i8x16::splat(9);
+    let mut v10: i8x16 = i8x16::splat(10);
+    let p = &array[0];
+
+    let time0 = std::time::Instant::now();
+    const LOOP: u64 = 200_0000_0000u64;
+
+    for _ in 0..LOOP {
+
+        unsafe { asm! {
+        "ldr {tmp}, [{p}]",
+        "add {i1}, {i1}, {tmp}",
+        "add {i2}, {i2}, {tmp}",
+        "add {i3}, {i3}, {tmp}",
+        "add.16b {v1}, {v1}, {v10}",
+
+        "ldr {tmp}, [{p},  8]",
+        "add {i4}, {i4}, {tmp}",
+        "add {i5}, {i5}, {tmp}",
+        "add {i6}, {i6}, {tmp}",
+        "add.16b {v2}, {v2}, {v10}",
+
+        "ldr {tmp}, [{p} , 16]",
+        "add {i7}, {i7}, {tmp}",
+        "add {i8}, {i8}, {tmp}",
+        "add {i9}, {i9}, {tmp}",
+        "add.16b {v3}, {v3}, {v10}",
+
+        "ldr {tmp}, [{p} , 24]",
+        "add {i10}, {i10}, {tmp}",
+        "add {i11}, {i11}, {tmp}",
+        "add {i12}, {i12}, {tmp}",
+        "add.16b {v4}, {v4}, {v10}",
+
+        "ldr {tmp}, [{p} , 32]",
+        "add {i13}, {i13}, {tmp}",
+        "add {i14}, {i14}, {tmp}",
+        "add {i15}, {i15}, {tmp}",
+        "add.16b {v5}, {v5}, {v10}",
+
+        "ldr {tmp}, [{p} , 40]",
+        "add {i16}, {i16}, {tmp}",
+        "add {i17}, {i17}, {tmp}",
+        "add {i18}, {i18}, {tmp}",
+        "add.16b {v6}, {v6}, {v10}",
+
+        "ldr {tmp}, [{p} , 48]",
+        "add {i19}, {i19}, {tmp}",
+        "add {i20}, {i20}, {tmp}",
+        "add {i21}, {i21}, {tmp}",
+        "add.16b {v7}, {v7}, {v10}",
+
+        "ldr {tmp}, [{p} , 56]",
+        "add {i22}, {i22}, {tmp}",
+        "add {i23}, {i23}, {tmp}",
+        "add {i24}, {i24}, {tmp}",
+        "add.16b {v8}, {v8}, {v10}",
+
+        p = in(reg) p,
+        i1 = inout(reg) i1,
+        i2 = inout(reg) i2,
+        i3 = inout(reg) i3,
+        i4 = inout(reg) i4,
+        i5 = inout(reg) i5,
+        i6 = inout(reg) i6,
+        i7 = inout(reg) i7,
+        i8 = inout(reg) i8,
+        i9 = inout(reg) i9,
+        i10 = inout(reg) i10,
+        i11 = inout(reg) i11,
+        i12 = inout(reg) i12,
+        i13 = inout(reg) i13,
+        i14 = inout(reg) i14,
+        i15 = inout(reg) i15,
+        i16 = inout(reg) i16,
+        i17 = inout(reg) i17,
+        i18 = inout(reg) i18,
+        i19 = inout(reg) i19,
+        i20 = inout(reg) i20,
+        i21 = inout(reg) i21,
+        i22 = inout(reg) i22,
+        i23 = inout(reg) i23,
+        i24 = inout(reg) i24,
+        v1 =  inout(vreg) v1,
+        v2 =  inout(vreg) v2,
+        v3 =  inout(vreg) v3,
+        v4 =  inout(vreg) v4,
+        v5 =  inout(vreg) v5,
+        v6 =  inout(vreg) v6,
+        v7 =  inout(vreg) v7,
+        v8 =  inout(vreg) v8,
         v10 =  inout(vreg) v10,
         tmp = out(reg) _,
         }

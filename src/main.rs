@@ -29,6 +29,7 @@ mod ver18;
 mod ver20;
 mod ver21;
 mod ver22;
+mod ver23;
 
 #[derive(Parser)]
 #[command(version, author, about)]
@@ -97,6 +98,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                "v20" => ver20::ver20(),     // 6.10s
                "v21" => ver21::ver21(),     // optimize FileReader
                "v22" => ver22::ver22(),
+               "v23" => ver23::ver23(),
                // "compare_str_to_hash" => {
                //     ver18::compare_str_to_hash();
                //     Ok(HashMap::new())
