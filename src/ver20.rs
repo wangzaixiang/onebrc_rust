@@ -379,19 +379,21 @@ pub fn ver20() -> Result<HashMap<String,(f32, f32, f32)>, Box<dyn std::error::Er
 fn check_result(aggr: &AggrInfo) {
     let mut count = 0;
     let mut dupicated = 0;
-    for i in 0..aggr.linar_hash_table.len() {
-        let item = &aggr.linar_hash_table[i];
+    for i in 0.. aggr.linar_hash_table.len() {
+        let item = & aggr.linar_hash_table[i];
         if !item.key.is_empty() {
             count += 1;
-            let is_dupicated = if i > 0 {
-                *aggr.linar_hash_table[i - 1].key_hash.as_array() != [0, 0]
-            } else {
+            let is_dupicated = if i> 0 {
+                // item.key_hash == aggr.linar_hash_table[i-1].key_hash
+                aggr.linar_hash_table[i-1].key_hash[0] != 0
+            }
+            else {
                 false
             };
-            let key = unsafe { std::str::from_utf8_unchecked(item.key.as_slice()) };
+            let key = unsafe { std::str::from_utf8_unchecked( item.key.as_slice() ) };
             if is_dupicated {
                 dupicated += 1;
-                println!("{};\t{}\t{}", key, i, is_dupicated);
+                println!("{};\t{}\t{} prev:{}", key, i, is_dupicated, unsafe {std::str::from_utf8_unchecked( aggr.linar_hash_table[i-1].key.as_slice() )});
             }
         }
     }

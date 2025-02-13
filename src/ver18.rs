@@ -304,21 +304,6 @@ fn str_to_hash_normal(name: &[u8] ) -> (u64, u64) {
     (key_a, key_b)
 }
 
-#[test]
-fn test_str_to_hash3(){
-
-    let name = "12345678ABCDEFGH+-=;";
-    let name1 = &name[0..5];
-    let name2 = &name[0..10];
-    let name3 = &name[0..20];
-
-    let (name1_a, name1_b, name2_a, name2_b, name3_a, name3_b) = str_to_hash_simd_3(name1.as_bytes(), name2.as_bytes(), name3.as_bytes());
-
-    println!("name1_a: {:x}, name1_b: {:x}, name2_a: {:x}, name2_b: {:x}, name3_a: {:x}, name3_b: {:x}", name1_a, name1_b, name2_a, name2_b, name3_a, name3_b);
-
-}
-
-
 #[derive(Clone)]
 #[repr(C, align(64))]
 struct AggrItem {
@@ -389,11 +374,13 @@ pub fn ver18() -> Result<HashMap<String,(f32, f32, f32)>, Box<dyn std::error::Er
 
 fn check_result(aggr: &AggrInfo) {
     let mut count = 0;
+    let mut dupicated = 0;
     for i in 0.. aggr.hashes.len() {
         let item = & aggr.hashes[i];
         if !item.key.is_empty() {
             count += 1;
             let is_dupicated = if i> 0 {
+                // item.key_hash == aggr.linar_hash_table[i-1].key_hash
                 aggr.hashes[i-1].key_a != 0
             }
             else {
@@ -401,7 +388,8 @@ fn check_result(aggr: &AggrInfo) {
             };
             let key = unsafe { std::str::from_utf8_unchecked( item.key.as_slice() ) };
             if is_dupicated {
-                println!("{};\t{}\t{}", key, i, is_dupicated);
+                dupicated += 1;
+                println!("{};\t{}\t{} prev:{}", key, i, is_dupicated, unsafe {std::str::from_utf8_unchecked( aggr.hashes[i-1].key.as_slice() )});
             }
         }
     }

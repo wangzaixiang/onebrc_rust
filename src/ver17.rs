@@ -461,18 +461,23 @@ pub fn ver17() -> Result<HashMap<String,(f32, f32, f32)>, Box<dyn std::error::Er
 
 fn check_result(aggr: &AggrInfo) {
     let mut count = 0;
+    let mut dupicated = 0;
     for i in 0.. aggr.hashes.len() {
         let item = & aggr.hashes[i];
         if !item.key.is_empty() {
             count += 1;
-            let check = if i> 0 {
-                item.key_a == aggr.hashes[i-1].key_a && item.key_b == aggr.hashes[i-1].key_b
+            let is_dupicated = if i> 0 {
+                // item.key_hash == aggr.linar_hash_table[i-1].key_hash
+                aggr.hashes[i-1].key_a != 0
             }
             else {
                 false
             };
             let key = unsafe { std::str::from_utf8_unchecked( item.key.as_slice() ) };
-            println!("{};\t{}\t{}", key, i, check);
+            if is_dupicated {
+                dupicated += 1;
+                println!("{};\t{}\t{} prev:{}", key, i, is_dupicated, unsafe {std::str::from_utf8_unchecked( aggr.hashes[i-1].key.as_slice() )});
+            }
         }
     }
     assert_eq!(count, 413);
